@@ -6,8 +6,16 @@ It keeps reusable shell recipes in TOML and gives you a fast keyboard UI to sear
 
 ## Install / Run
 
+Install from crates.io:
+
 ```bash
-cargo run
+cargo install pantry-tui
+```
+
+Then run it with:
+
+```bash
+pantry
 ```
 
 On first launch, Pantry creates a starter recipe file at:
