@@ -76,7 +76,7 @@ command = "echo {{this is literal}} and {this_is_a_placeholder}"
 - `/`: enter search mode
 - `Esc`: leave search mode
 - Type while in search mode to filter recipes
-- `up/down` or `j/k`: move selection
+- `up/down`: move selection
 - `Enter`: run selected command
 - `y`: copy selected command to clipboard
 - `Y`: copy selected command to clipboard, then quit

@@ -310,8 +310,8 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Char('y') => {
             app.start_action(Action::Copy { quit_after: false });
         }
-        KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
-        KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
+        KeyCode::Up => app.move_selection(-1),
+        KeyCode::Down => app.move_selection(1),
         KeyCode::Enter => {
             app.start_action(Action::Run);
         }
@@ -337,12 +337,12 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
             app.mode = Mode::Normal;
             app.status.clear();
         }
-        KeyCode::Up | KeyCode::Char('k') => {
+        KeyCode::Up => {
             app.mode = Mode::Normal;
             app.status.clear();
             app.move_selection(-1);
         }
-        KeyCode::Down | KeyCode::Char('j') => {
+        KeyCode::Down => {
             app.mode = Mode::Normal;
             app.status.clear();
             app.move_selection(1);
@@ -379,12 +379,12 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent) -> bool {
                     app.status = "Cancelled".to_string();
                     return false;
                 }
-                KeyCode::Up | KeyCode::Char('k') => {
+                KeyCode::Up => {
                     if prompt.selected_preset > 0 {
                         prompt.selected_preset -= 1;
                     }
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+                KeyCode::Down => {
                     if prompt.selected_preset < prompt.presets.len() {
                         prompt.selected_preset += 1;
                     }
