@@ -1,6 +1,6 @@
 [package]
 name = "pantry-tui"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["James Tan <james_tan97@outlook.com>"]
 description = "A TUI cookbook for managing and executing reusable shell snippets"
