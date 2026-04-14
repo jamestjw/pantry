@@ -70,6 +70,7 @@ This is usually the most readable format for Pantry recipes, and placeholders st
 - Type while in search mode to filter recipes
 - `up/down` or `j/k`: move selection
 - `Enter`: run selected command
-- `Ctrl+Y`: copy selected command to clipboard
+- `y`: copy selected command to clipboard
+- `Y`: copy selected command to clipboard, then quit
 - `r`: reload recipe files
 - `q` or `Ctrl+C`: quit

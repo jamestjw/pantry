@@ -63,7 +63,7 @@ enum PromptStage {
 #[derive(Copy, Clone)]
 enum Action {
     Run,
-    Copy,
+    Copy { quit_after: bool },
 }
 
 struct RunOutput {
@@ -138,22 +138,21 @@ impl App {
         }
     }
 
-    fn start_action(&mut self, action: Action) {
+    fn start_action(&mut self, action: Action) -> bool {
         if matches!(action, Action::Run) && self.running_command.is_some() {
             self.status = "Already running a command".to_string();
-            return;
+            return false;
         }
 
         let filtered = self.filtered_indices();
         let Some(recipe_idx) = self.selected_recipe_index(&filtered) else {
             self.status = "No recipe selected".to_string();
-            return;
+            return false;
         };
         let recipe = &self.recipes[recipe_idx];
         let placeholders = template::placeholders(&recipe.command);
         if placeholders.is_empty() {
-            self.execute_action(action, recipe_idx, HashMap::new());
-            return;
+            return self.execute_action(action, recipe_idx, HashMap::new());
         }
         self.mode = Mode::Prompt(PromptState {
             action,
@@ -171,6 +170,7 @@ impl App {
             },
         });
         self.status.clear();
+        false
     }
 
     fn execute_action(
@@ -178,13 +178,14 @@ impl App {
         action: Action,
         recipe_idx: usize,
         values: HashMap<String, String>,
-    ) {
+    ) -> bool {
         let recipe_name = self.recipes[recipe_idx].name.clone();
         let rendered = template::render(&self.recipes[recipe_idx].command, &values);
         match action {
-            Action::Copy => match self.copy_to_clipboard(&rendered) {
+            Action::Copy { quit_after } => match self.copy_to_clipboard(&rendered) {
                 Ok(()) => {
                     self.status = format!("Copied: {}", recipe_name);
+                    return quit_after;
                 }
                 Err(err) => {
                     self.status = format!("Clipboard error: {err}");
@@ -201,6 +202,8 @@ impl App {
                 self.status.clear();
             }
         }
+
+        false
     }
 
     fn copy_to_clipboard(&mut self, text: &str) -> io::Result<()> {
@@ -281,7 +284,9 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> io::Result
                 }
             }
             Mode::Prompt(_) => {
-                handle_prompt_key(&mut app, key);
+                if handle_prompt_key(&mut app, key) {
+                    break;
+                }
             }
         }
 
@@ -296,17 +301,22 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
         return true;
     }
 
-    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('y')) {
-        app.start_action(Action::Copy);
-        app.reset_selection_if_needed();
-        return false;
-    }
-
     match key.code {
         KeyCode::Char('q') => return true,
+        KeyCode::Char('Y') => {
+            if app.start_action(Action::Copy { quit_after: true }) {
+                return true;
+            }
+            app.reset_selection_if_needed();
+        }
+        KeyCode::Char('y') => {
+            app.start_action(Action::Copy { quit_after: false });
+        }
         KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
-        KeyCode::Enter => app.start_action(Action::Run),
+        KeyCode::Enter => {
+            app.start_action(Action::Run);
+        }
         KeyCode::Char('r') => app.reload(),
         KeyCode::Char('/') => {
             app.mode = Mode::Search;
@@ -322,12 +332,6 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
 fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
     if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
         return true;
-    }
-
-    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('y')) {
-        app.start_action(Action::Copy);
-        app.reset_selection_if_needed();
-        return false;
     }
 
     match key.code {
@@ -365,7 +369,7 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
     false
 }
 
-fn handle_prompt_key(app: &mut App, key: KeyEvent) {
+fn handle_prompt_key(app: &mut App, key: KeyEvent) -> bool {
     let mut execute: Option<(Action, usize, HashMap<String, String>)> = None;
     let mut status: Option<String> = None;
 
@@ -375,7 +379,7 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "Cancelled".to_string();
-                    return;
+                    return false;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     if prompt.selected_preset > 0 {
@@ -411,7 +415,7 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
                     app.status = "Cancelled".to_string();
-                    return;
+                    return false;
                 }
                 KeyCode::Backspace => {
                     prompt.input.pop();
@@ -439,8 +443,10 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent) {
 
     if let Some((action, recipe_idx, values)) = execute {
         app.mode = Mode::Normal;
-        app.execute_action(action, recipe_idx, values);
+        return app.execute_action(action, recipe_idx, values);
     }
+
+    false
 }
 
 fn render(frame: &mut Frame, app: &App) {
@@ -499,10 +505,10 @@ fn render(frame: &mut Frame, app: &App) {
     frame.render_widget(details, body[1]);
 
     let shortcut_text = match app.mode {
-        Mode::Normal => "Normal: / search | Enter run | Ctrl+Y copy | r reload | q / Ctrl+C quit",
-        Mode::Search => {
-            "Search: type filter | Up/Down move | Enter run | Ctrl+Y copy | Esc stop editing"
+        Mode::Normal => {
+            "Normal: / search | Enter run | y copy | Y copy+quit | r reload | q / Ctrl+C quit"
         }
+        Mode::Search => "Search: type filter | Up/Down move | Enter run | Esc stop editing",
         Mode::Prompt(_) => "Prompt: type value | Enter continue | Esc cancel",
     };
     let footer = Layout::default()
@@ -639,7 +645,8 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
         PromptStage::ChoosePreset => {
             let title = match prompt.action {
                 Action::Run => "Choose preset to run",
-                Action::Copy => "Choose preset to copy",
+                Action::Copy { quit_after: false } => "Choose preset to copy",
+                Action::Copy { quit_after: true } => "Choose preset to copy and quit",
             };
             let mut lines = Vec::new();
             lines.push(
@@ -663,10 +670,10 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
             (title, Text::from(lines.join("\n")))
         }
         PromptStage::InputValues => {
-            let field = &prompt.placeholders[prompt.current];
             let title = match prompt.action {
                 Action::Run => "Fill placeholders to run",
-                Action::Copy => "Fill placeholders to copy",
+                Action::Copy { quit_after: false } => "Fill placeholders to copy",
+                Action::Copy { quit_after: true } => "Fill placeholders to copy and quit",
             };
             let mut lines = vec![
                 Line::from(format!(
