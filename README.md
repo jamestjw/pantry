@@ -47,6 +47,22 @@ Use placeholders in braces (`{branch}`, `{service}`, etc.). Pantry prompts for v
 
 You can define `presets` as ready-made placeholder assignments. For commands with multiple placeholders, include all values in a single preset string, for example `"service=api env=prod"` or `"branch=main remote=origin"`. At runtime Pantry lets you choose a preset or enter custom values manually.
 
+For multiline commands, prefer TOML multiline strings:
+
+```toml
+[[recipe]]
+name = "deploy service"
+description = "Build and deploy a service"
+command = """
+docker build -t {service}:{tag} .
+docker push {service}:{tag}
+kubectl set image deployment/{service} {service}={service}:{tag}
+"""
+presets = ["service=api tag=latest"]
+```
+
+This is usually the most readable format for Pantry recipes, and placeholders still work across newlines.
+
 ## Keybindings
 
 - `/`: enter search mode

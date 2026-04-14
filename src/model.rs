@@ -12,7 +12,7 @@ pub struct Recipe {
     #[serde(default)]
     pub description: String,
     pub command: String,
-    #[serde(default, alias = "examples")]
+    #[serde(default)]
     pub presets: Vec<String>,
     #[serde(default = "default_safety")]
     pub safety: String,

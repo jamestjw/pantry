@@ -11,7 +11,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Text};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::clipboard::ClipboardProvider;
@@ -594,7 +594,9 @@ fn recipe_details(app: &App, filtered: &[usize]) -> Text<'static> {
         Line::from("Command:"),
     ];
 
-    lines.push(Line::from(recipe.command.clone()));
+    for line in recipe.command.lines() {
+        lines.push(Line::from(format!("  {line}")));
+    }
 
     if !recipe.presets.is_empty() {
         lines.push(Line::from(String::new()));
@@ -627,7 +629,10 @@ fn recipe_details(app: &App, filtered: &[usize]) -> Text<'static> {
 }
 
 fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
-    let area = centered_rect(60, 20, frame.area());
+    let area = match prompt.stage {
+        PromptStage::ChoosePreset => centered_rect(60, 20, frame.area()),
+        PromptStage::InputValues => centered_rect(70, 40, frame.area()),
+    };
     frame.render_widget(Clear, area);
 
     let (title, text) = match prompt.stage {
@@ -663,16 +668,44 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
                 Action::Run => "Fill placeholders to run",
                 Action::Copy => "Fill placeholders to copy",
             };
-            (
-                title,
-                Text::from(format!(
-                    "Value for {{{}}} ({}/{}):\n{}\n\nEnter to continue, Esc to cancel",
-                    field,
+            let mut lines = vec![
+                Line::from(format!(
+                    "Field {}/{} is active",
                     prompt.current + 1,
-                    prompt.placeholders.len(),
-                    prompt.input
+                    prompt.placeholders.len()
                 )),
-            )
+                Line::from(String::new()),
+            ];
+
+            for (idx, placeholder) in prompt.placeholders.iter().enumerate() {
+                let value = if idx < prompt.current {
+                    prompt.values.get(placeholder).cloned().unwrap_or_default()
+                } else if idx == prompt.current {
+                    prompt.input.clone()
+                } else {
+                    String::new()
+                };
+
+                let prefix = if idx == prompt.current { ">" } else { " " };
+                let line = if idx == prompt.current {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{} {{{}}}: ", prefix, placeholder),
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(value, Style::default().fg(Color::Yellow)),
+                    ])
+                } else {
+                    Line::from(format!("{} {{{}}}: {}", prefix, placeholder, value))
+                };
+                lines.push(line);
+            }
+
+            lines.push(Line::from(String::new()));
+            lines.push(Line::from("Enter to continue, Esc to cancel"));
+            (title, Text::from(lines))
         }
     };
 
