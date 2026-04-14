@@ -22,6 +22,16 @@ pub struct Recipe {
     pub source: String,
     #[serde(skip)]
     pub compiled: Template,
+    #[serde(skip)]
+    pub last_run: Option<RunOutput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunOutput {
+    pub command: String,
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 fn default_safety() -> String {

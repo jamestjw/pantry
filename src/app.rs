@@ -15,7 +15,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use ratatui::Frame;
 
 use crate::clipboard::ClipboardProvider;
-use crate::model::{reload_recipes, Recipe};
+use crate::model::{reload_recipes, Recipe, RunOutput};
 use crate::template;
 
 pub fn run(recipes: Vec<Recipe>) -> io::Result<()> {
@@ -31,7 +31,6 @@ struct App {
     selected: usize,
     status: String,
     mode: Mode,
-    last_run: Option<RunOutput>,
     running_command: Option<RunningCommand>,
     spinner_frame: usize,
     clipboard: ClipboardProvider,
@@ -66,14 +65,8 @@ enum Action {
     Copy { quit_after: bool },
 }
 
-struct RunOutput {
-    command: String,
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
-}
-
 struct RunningCommand {
+    recipe_idx: usize,
     receiver: Receiver<RunOutput>,
 }
 
@@ -85,7 +78,6 @@ impl App {
             selected: 0,
             status: String::new(),
             mode: Mode::Normal,
-            last_run: None,
             running_command: None,
             spinner_frame: 0,
             clipboard: ClipboardProvider::detect()?,
@@ -198,7 +190,10 @@ impl App {
                     let output = run_command(&rendered);
                     let _ = sender.send(output);
                 });
-                self.running_command = Some(RunningCommand { receiver });
+                self.running_command = Some(RunningCommand {
+                    recipe_idx,
+                    receiver,
+                });
                 self.spinner_frame = 0;
                 self.status.clear();
             }
@@ -212,30 +207,32 @@ impl App {
     }
 
     fn poll_running_command(&mut self) {
-        let mut finished_output = None;
+        let mut finished = None;
         let mut disconnected = false;
 
         if let Some(running_command) = self.running_command.as_ref() {
             match running_command.receiver.try_recv() {
-                Ok(output) => finished_output = Some(output),
+                Ok(output) => {
+                    finished = Some((running_command.recipe_idx, output));
+                }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => disconnected = true,
             }
         }
 
-        if let Some(output) = finished_output {
+        if let Some((idx, output)) = finished {
             self.status = match output.code {
                 Some(0) => "Ran successfully".to_string(),
                 Some(code) => format!("Command exited with code {code}"),
                 None => "Command terminated by signal".to_string(),
             };
-            self.last_run = Some(output);
+            if idx < self.recipes.len() {
+                self.recipes[idx].last_run = Some(output);
+            }
             self.running_command = None;
-            self.spinner_frame = 0;
         } else if disconnected {
             self.status = "Command runner disconnected".to_string();
             self.running_command = None;
-            self.spinner_frame = 0;
         }
     }
 
@@ -613,7 +610,7 @@ fn recipe_details(app: &App, filtered: &[usize]) -> Text<'static> {
         }
     }
 
-    if let Some(run) = &app.last_run {
+    if let Some(run) = &recipe.last_run {
         lines.push(Line::from(String::new()));
         lines.push(Line::from("Last run:"));
         lines.push(Line::from(format!("$ {}", run.command)));
