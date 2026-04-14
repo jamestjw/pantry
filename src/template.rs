@@ -173,4 +173,48 @@ mod tests {
         let rendered = render(command, &values);
         assert_eq!(rendered, "ls /tmp {literal} test.txt");
     }
+
+    #[test]
+    fn handles_multiline_commands() {
+        let command = "git commit -m \"{message}\"\ngit push {remote} {branch}";
+        let found = placeholders(command);
+        assert_eq!(
+            found,
+            vec![
+                "branch".to_string(),
+                "message".to_string(),
+                "remote".to_string()
+            ]
+        );
+
+        let mut values = HashMap::new();
+        values.insert("message".to_string(), "feat: add tests".to_string());
+        values.insert("remote".to_string(), "origin".to_string());
+        values.insert("branch".to_string(), "main".to_string());
+
+        let rendered = render(command, &values);
+        assert_eq!(
+            rendered,
+            "git commit -m \"feat: add tests\"\ngit push origin main"
+        );
+    }
+
+    #[test]
+    fn parses_multiline_assignments() {
+        let got = parse_assignment_values("branch=main\nremote=origin");
+        assert_eq!(got.get("branch"), Some(&"main".to_string()));
+        assert_eq!(got.get("remote"), Some(&"origin".to_string()));
+    }
+
+    #[test]
+    fn handles_newlines_at_edges() {
+        let command = "\n{cmd}\n";
+        let found = placeholders(command);
+        assert_eq!(found, vec!["cmd".to_string()]);
+
+        let mut values = HashMap::new();
+        values.insert("cmd".to_string(), "ls".to_string());
+        let rendered = render(command, &values);
+        assert_eq!(rendered, "\nls\n");
+    }
 }
