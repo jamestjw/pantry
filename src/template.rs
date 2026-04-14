@@ -1,97 +1,131 @@
+use nom::{
+    branch::alt,
+    bytes::complete::{tag, take_while1},
+    character::complete::{multispace0, multispace1},
+    combinator::map,
+    multi::{many0, separated_list0},
+    sequence::{delimited, separated_pair},
+    IResult, Parser,
+};
 use std::collections::{BTreeSet, HashMap};
+
+#[derive(Debug, PartialEq)]
+enum Part {
+    Literal(String),
+    Placeholder(String),
+    EscapedOpen,
+    EscapedClose,
+}
+
+fn parse_placeholder(input: &str) -> IResult<&str, Part> {
+    map(
+        delimited(tag("{"), take_while1(is_valid_name_char), tag("}")),
+        |name: &str| Part::Placeholder(name.to_string()),
+    )
+    .parse(input)
+}
+
+fn parse_escaped_open(input: &str) -> IResult<&str, Part> {
+    map(tag("{{"), |_| Part::EscapedOpen).parse(input)
+}
+
+fn parse_escaped_close(input: &str) -> IResult<&str, Part> {
+    map(tag("}}"), |_| Part::EscapedClose).parse(input)
+}
+
+fn parse_literal(input: &str) -> IResult<&str, Part> {
+    map(take_while1(|c| c != '{' && c != '}'), |s: &str| {
+        Part::Literal(s.to_string())
+    })
+    .parse(input)
+}
+
+fn parse_literal_single_brace(input: &str) -> IResult<&str, Part> {
+    map(alt((tag("{"), tag("}"))), |s: &str| {
+        Part::Literal(s.to_string())
+    })
+    .parse(input)
+}
+
+fn parse_template(input: &str) -> IResult<&str, Vec<Part>> {
+    many0(alt((
+        parse_escaped_open,
+        parse_escaped_close,
+        parse_placeholder,
+        parse_literal,
+        parse_literal_single_brace,
+    )))
+    .parse(input)
+}
+
+fn is_valid_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+}
 
 pub fn placeholders(command: &str) -> Vec<String> {
     let mut found = BTreeSet::new();
-    let chars: Vec<char> = command.chars().collect();
-    let mut i = 0usize;
-    while i < chars.len() {
-        if chars[i] == '{' {
-            if i + 1 < chars.len() && chars[i + 1] == '{' {
-                i += 2;
-                continue;
-            }
-            let mut j = i + 1;
-            while j < chars.len() && chars[j] != '}' {
-                j += 1;
-            }
-            if j < chars.len() && j > i + 1 {
-                let name: String = chars[i + 1..j].iter().collect();
-                if is_valid_name(&name) {
-                    found.insert(name);
-                }
-                i = j + 1;
-                continue;
+    if let Ok((_, parts)) = parse_template(command) {
+        for part in parts {
+            if let Part::Placeholder(name) = part {
+                found.insert(name);
             }
         }
-        i += 1;
     }
     found.into_iter().collect()
 }
 
 pub fn render(command: &str, values: &HashMap<String, String>) -> String {
     let mut out = String::new();
-    let chars: Vec<char> = command.chars().collect();
-    let mut i = 0usize;
-    while i < chars.len() {
-        if chars[i] == '{' {
-            if i + 1 < chars.len() && chars[i + 1] == '{' {
-                out.push('{');
-                i += 2;
-                continue;
-            }
-            let mut j = i + 1;
-            while j < chars.len() && chars[j] != '}' {
-                j += 1;
-            }
-            if j < chars.len() && j > i + 1 {
-                let name: String = chars[i + 1..j].iter().collect();
-                if let Some(value) = values.get(&name) {
-                    out.push_str(value);
-                    i = j + 1;
-                    continue;
+    if let Ok((_, parts)) = parse_template(command) {
+        for part in parts {
+            match part {
+                Part::Literal(s) => out.push_str(&s),
+                Part::Placeholder(name) => {
+                    if let Some(value) = values.get(&name) {
+                        out.push_str(value);
+                    } else {
+                        out.push('{');
+                        out.push_str(&name);
+                        out.push('}');
+                    }
                 }
-            }
-        } else if chars[i] == '}' {
-            if i + 1 < chars.len() && chars[i + 1] == '}' {
-                out.push('}');
-                i += 2;
-                continue;
+                Part::EscapedOpen => out.push('{'),
+                Part::EscapedClose => out.push('}'),
             }
         }
-        out.push(chars[i]);
-        i += 1;
     }
     out
 }
 
-pub fn parse_assignment_values(input: &str) -> HashMap<String, String> {
-    let mut values = HashMap::new();
-
-    for token in input.split_whitespace() {
-        let Some((key, value)) = token.split_once('=') else {
-            continue;
-        };
-
-        if is_valid_name(key) && !value.is_empty() {
-            values.insert(key.to_string(), value.to_string());
-        }
-    }
-
-    values
+fn parse_assignment(input: &str) -> IResult<&str, (String, String)> {
+    map(
+        separated_pair(
+            take_while1(is_valid_name_char),
+            tag("="),
+            take_while1(|c: char| !c.is_whitespace()),
+        ),
+        |(k, v): (&str, &str)| (k.to_string(), v.to_string()),
+    )
+    .parse(input)
 }
 
-fn is_valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+pub fn parse_assignment_values(input: &str) -> HashMap<String, String> {
+    let mut parser = delimited(
+        multispace0,
+        separated_list0(multispace1, parse_assignment),
+        multispace0,
+    );
+    if let Ok((_, assignments)) = parser.parse(input) {
+        assignments.into_iter().collect()
+    } else {
+        HashMap::new()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::collections::HashMap;
-
-    use super::{parse_assignment_values, placeholders, render};
 
     #[test]
     fn extracts_unique_placeholders() {
@@ -125,5 +159,18 @@ mod tests {
         values.insert("is_placeholder".to_string(), "fixed".to_string());
         let rendered = render(command, &values);
         assert_eq!(rendered, "echo {not_a_placeholder} fixed }");
+    }
+
+    #[test]
+    fn handles_complex_template() {
+        let command = "ls {dir} {{literal}} {file}";
+        let found = placeholders(command);
+        assert_eq!(found, vec!["dir".to_string(), "file".to_string()]);
+
+        let mut values = HashMap::new();
+        values.insert("dir".to_string(), "/tmp".to_string());
+        values.insert("file".to_string(), "test.txt".to_string());
+        let rendered = render(command, &values);
+        assert_eq!(rendered, "ls /tmp {literal} test.txt");
     }
 }
