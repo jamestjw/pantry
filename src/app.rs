@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::io;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -29,6 +31,8 @@ struct App {
     status: String,
     mode: Mode,
     last_run: Option<RunOutput>,
+    running_command: Option<RunningCommand>,
+    spinner_frame: usize,
 }
 
 enum Mode {
@@ -59,6 +63,10 @@ struct RunOutput {
     stderr: String,
 }
 
+struct RunningCommand {
+    receiver: Receiver<RunOutput>,
+}
+
 impl App {
     fn new(recipes: Vec<Recipe>) -> Self {
         Self {
@@ -68,6 +76,8 @@ impl App {
             status: String::new(),
             mode: Mode::Normal,
             last_run: None,
+            running_command: None,
+            spinner_frame: 0,
         }
     }
 
@@ -118,6 +128,11 @@ impl App {
     }
 
     fn start_action(&mut self, action: Action) {
+        if matches!(action, Action::Run) && self.running_command.is_some() {
+            self.status = "Already running a command".to_string();
+            return;
+        }
+
         let filtered = self.filtered_indices();
         let Some(recipe_idx) = self.selected_recipe_index(&filtered) else {
             self.status = "No recipe selected".to_string();
@@ -146,26 +161,61 @@ impl App {
         recipe_idx: usize,
         values: HashMap<String, String>,
     ) {
-        let recipe = &self.recipes[recipe_idx];
-        let rendered = template::render(&recipe.command, &values);
+        let recipe_name = self.recipes[recipe_idx].name.clone();
+        let rendered = template::render(&self.recipes[recipe_idx].command, &values);
         match action {
             Action::Copy => match copy_to_clipboard(&rendered) {
                 Ok(()) => {
-                    self.status = format!("Copied: {}", recipe.name);
+                    self.status = format!("Copied: {}", recipe_name);
                 }
                 Err(err) => {
                     self.status = format!("Clipboard error: {err}");
                 }
             },
             Action::Run => {
-                let output = run_command(&rendered);
-                self.status = match output.code {
-                    Some(0) => format!("Ran successfully: {}", recipe.name),
-                    Some(code) => format!("Command exited with code {code}"),
-                    None => "Command terminated by signal".to_string(),
-                };
-                self.last_run = Some(output);
+                let (sender, receiver) = mpsc::channel();
+                thread::spawn(move || {
+                    let output = run_command(&rendered);
+                    let _ = sender.send(output);
+                });
+                self.running_command = Some(RunningCommand { receiver });
+                self.spinner_frame = 0;
+                self.status.clear();
             }
+        }
+    }
+
+    fn poll_running_command(&mut self) {
+        let mut finished_output = None;
+        let mut disconnected = false;
+
+        if let Some(running_command) = self.running_command.as_ref() {
+            match running_command.receiver.try_recv() {
+                Ok(output) => finished_output = Some(output),
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => disconnected = true,
+            }
+        }
+
+        if let Some(output) = finished_output {
+            self.status = match output.code {
+                Some(0) => "Ran successfully".to_string(),
+                Some(code) => format!("Command exited with code {code}"),
+                None => "Command terminated by signal".to_string(),
+            };
+            self.last_run = Some(output);
+            self.running_command = None;
+            self.spinner_frame = 0;
+        } else if disconnected {
+            self.status = "Command runner disconnected".to_string();
+            self.running_command = None;
+            self.spinner_frame = 0;
+        }
+    }
+
+    fn tick(&mut self) {
+        if self.running_command.is_some() {
+            self.spinner_frame = (self.spinner_frame + 1) % 4;
         }
     }
 
@@ -185,12 +235,15 @@ impl App {
 
 fn run_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> io::Result<()> {
     loop {
+        app.poll_running_command();
         terminal.draw(|frame| render(frame, &app))?;
 
         if !event::poll(Duration::from_millis(150))? {
+            app.tick();
             continue;
         }
         let Event::Key(key) = event::read()? else {
+            app.tick();
             continue;
         };
 
@@ -209,6 +262,8 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> io::Result
                 handle_prompt_key(&mut app, key);
             }
         }
+
+        app.tick();
     }
 
     Ok(())
@@ -406,39 +461,54 @@ fn render(frame: &mut Frame, app: &App) {
     }
 }
 
-fn footer_state(app: &App) -> (&str, Style) {
+fn footer_state(app: &App) -> (String, Style) {
+    if app.running_command.is_some() {
+        let frames = ["|", "/", "-", "\\"];
+        let spinner = frames[app.spinner_frame % frames.len()];
+        return (format!("RUN {spinner}"), Style::default().fg(Color::Cyan));
+    }
+
     if app.status.starts_with("Clipboard error:") {
-        return ("COPY ERROR", Style::default().fg(Color::Red));
+        return ("COPY ERROR".to_string(), Style::default().fg(Color::Red));
     }
     if app.status.starts_with("Reload failed:") {
-        return ("RELOAD ERROR", Style::default().fg(Color::Red));
+        return ("RELOAD ERROR".to_string(), Style::default().fg(Color::Red));
     }
     if app.status == "Command terminated by signal" {
-        return ("SIGNAL", Style::default().fg(Color::Red));
+        return ("SIGNAL".to_string(), Style::default().fg(Color::Red));
     }
     if app.status.starts_with("Command exited with code") {
-        return ("RUN FAILED", Style::default().fg(Color::Red));
+        return ("RUN FAILED".to_string(), Style::default().fg(Color::Red));
+    }
+    if app.status == "Command runner disconnected" {
+        return ("RUN ERROR".to_string(), Style::default().fg(Color::Red));
     }
     if app.status.starts_with("Copied:") {
-        return ("COPIED!", Style::default().fg(Color::LightGreen));
+        return (
+            "COPIED!".to_string(),
+            Style::default().fg(Color::LightGreen),
+        );
     }
     if app.status == "Reloaded recipes" {
-        return ("RELOADED", Style::default().fg(Color::Cyan));
+        return ("RELOADED".to_string(), Style::default().fg(Color::Cyan));
     }
-    if app.status.starts_with("Ran successfully:") {
-        return ("RAN", Style::default().fg(Color::LightGreen));
+    if app.status == "Ran successfully" {
+        return ("RAN".to_string(), Style::default().fg(Color::LightGreen));
     }
     if app.status == "No recipe selected" {
-        return ("NO RECIPE", Style::default().fg(Color::Yellow));
+        return ("NO RECIPE".to_string(), Style::default().fg(Color::Yellow));
     }
     if app.status == "Cancelled" {
-        return ("CANCELLED", Style::default().fg(Color::Yellow));
+        return ("CANCELLED".to_string(), Style::default().fg(Color::Yellow));
+    }
+    if app.status == "Already running a command" {
+        return ("RUNNING".to_string(), Style::default().fg(Color::Yellow));
     }
 
     match app.mode {
-        Mode::Normal => ("NORMAL", Style::default().fg(Color::Blue)),
-        Mode::Search => ("SEARCH", Style::default().fg(Color::Yellow)),
-        Mode::Prompt(_) => ("PROMPT", Style::default().fg(Color::Magenta)),
+        Mode::Normal => ("NORMAL".to_string(), Style::default().fg(Color::Blue)),
+        Mode::Search => ("SEARCH".to_string(), Style::default().fg(Color::Yellow)),
+        Mode::Prompt(_) => ("PROMPT".to_string(), Style::default().fg(Color::Magenta)),
     }
 }
 
