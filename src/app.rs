@@ -460,12 +460,20 @@ fn render(frame: &mut Frame, app: &App) {
     let filtered = app.filtered_indices();
 
     let search_title = match app.mode {
-        Mode::Normal => "Search (/ to edit)",
-        Mode::Search => "Search (Esc to stop editing)",
-        Mode::Prompt(_) => "Search",
+        Mode::Normal => " Search (/ to edit) ",
+        Mode::Search => " Search (Esc to stop editing) ",
+        Mode::Prompt(_) => " Search ",
     };
-    let search = Paragraph::new(app.query.clone())
-        .block(Block::default().borders(Borders::ALL).title(search_title));
+
+    let search_block = match app.mode {
+        Mode::Search => Block::default()
+            .borders(Borders::ALL)
+            .title(search_title)
+            .border_style(Style::default().fg(Color::Yellow)),
+        _ => Block::default().borders(Borders::ALL).title(search_title),
+    };
+
+    let search = Paragraph::new(app.query.clone()).block(search_block);
     frame.render_widget(search, layout[0]);
 
     let body = Layout::default()
@@ -477,17 +485,28 @@ fn render(frame: &mut Frame, app: &App) {
         .iter()
         .map(|idx| {
             let recipe = &app.recipes[*idx];
-            let subtitle = if recipe.tags.is_empty() {
-                String::new()
-            } else {
-                format!(" [{}]", recipe.tags.join(", "))
-            };
-            ListItem::new(Line::from(format!("{}{}", recipe.name, subtitle)))
+            let mut spans = vec![Span::raw(recipe.name.clone())];
+            for tag in &recipe.tags {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(
+                    format!("[{}]", tag),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
+    let list_block = match app.mode {
+        Mode::Normal => Block::default()
+            .borders(Borders::ALL)
+            .title(" Recipes ")
+            .border_style(Style::default().fg(Color::Blue)),
+        _ => Block::default().borders(Borders::ALL).title(" Recipes "),
+    };
+
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Recipes"))
+        .block(list_block)
         .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED))
         .highlight_symbol("> ");
     let mut state = ListState::default();
@@ -498,7 +517,7 @@ fn render(frame: &mut Frame, app: &App) {
 
     let detail_text = recipe_details(app, &filtered);
     let details = Paragraph::new(detail_text)
-        .block(Block::default().borders(Borders::ALL).title("Details"))
+        .block(Block::default().borders(Borders::ALL).title(" Details "))
         .wrap(Wrap { trim: false });
     frame.render_widget(details, body[1]);
 
@@ -514,13 +533,13 @@ fn render(frame: &mut Frame, app: &App) {
         .constraints([Constraint::Min(10), Constraint::Length(20)])
         .split(layout[2]);
     let shortcuts = Paragraph::new(Line::from(shortcut_text))
-        .block(Block::default().borders(Borders::ALL).title("Shortcuts"))
+        .block(Block::default().borders(Borders::ALL).title(" Shortcuts "))
         .wrap(Wrap { trim: true });
     frame.render_widget(shortcuts, footer[0]);
 
     let (state_text, state_style) = footer_state(app);
     let state = Paragraph::new(Line::from(state_text).style(state_style))
-        .block(Block::default().borders(Borders::ALL).title("State"))
+        .block(Block::default().borders(Borders::ALL).title(" State "))
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
     frame.render_widget(state, footer[1]);
@@ -587,44 +606,86 @@ fn recipe_details(app: &App, filtered: &[usize]) -> Text<'static> {
     };
     let recipe = &app.recipes[recipe_idx];
 
+    let header_style = Style::default()
+        .fg(Color::Blue)
+        .add_modifier(Modifier::BOLD);
+
     let mut lines = vec![
-        Line::from(format!("Name: {}", recipe.name)),
-        Line::from(format!("Safety: {}", recipe.safety)),
-        Line::from(format!("Source: {}", recipe.source)),
+        Line::from(vec![
+            Span::styled("NAME: ", header_style),
+            Span::raw(recipe.name.clone()),
+        ]),
+        Line::from(vec![
+            Span::styled("SAFETY: ", header_style),
+            Span::styled(
+                recipe.safety.clone(),
+                if recipe.safety == "safe" {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Red)
+                },
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("SOURCE: ", header_style),
+            Span::styled(recipe.source.clone(), Style::default().fg(Color::Magenta)),
+        ]),
         Line::from(String::new()),
-        Line::from("Description:"),
-        Line::from(recipe.description.clone()),
+        Line::from(vec![Span::styled("DESCRIPTION:", header_style)]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                recipe.description.clone(),
+                Style::default().add_modifier(Modifier::ITALIC),
+            ),
+        ]),
         Line::from(String::new()),
-        Line::from("Command:"),
+        Line::from(vec![Span::styled("COMMAND:", header_style)]),
     ];
 
     for line in recipe.command.lines() {
-        lines.push(Line::from(format!("  {line}")));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(line.to_string(), Style::default().fg(Color::LightYellow)),
+        ]));
     }
 
     if !recipe.presets.is_empty() {
         lines.push(Line::from(String::new()));
-        lines.push(Line::from("Presets:"));
+        lines.push(Line::from(vec![Span::styled("PRESETS:", header_style)]));
         for preset in &recipe.presets {
-            lines.push(Line::from(format!("- {}", preset)));
+            lines.push(Line::from(vec![
+                Span::raw("  - "),
+                Span::styled(preset.clone(), Style::default().fg(Color::Cyan)),
+            ]));
         }
     }
 
     if let Some(run) = &recipe.last_run {
         lines.push(Line::from(String::new()));
-        lines.push(Line::from("Last run:"));
-        lines.push(Line::from(format!("$ {}", run.command)));
-        lines.push(Line::from(format!("exit: {:?}", run.code)));
+        lines.push(Line::from(vec![Span::styled("LAST RUN:", header_style)]));
+        lines.push(Line::from(format!("  $ {}", run.command)));
+        lines.push(Line::from(vec![
+            Span::raw("  exit: "),
+            Span::styled(
+                format!("{:?}", run.code),
+                if run.code == Some(0) {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Red)
+                },
+            ),
+        ]));
         if !run.stdout.trim().is_empty() {
-            lines.push(Line::from("stdout:"));
+            lines.push(Line::from("  stdout:"));
             for line in run.stdout.lines().take(6) {
-                lines.push(Line::from(line.to_string()));
+                lines.push(Line::from(format!("    {}", line)));
             }
         }
         if !run.stderr.trim().is_empty() {
-            lines.push(Line::from("stderr:"));
+            lines.push(Line::from("  stderr:"));
             for line in run.stderr.lines().take(6) {
-                lines.push(Line::from(line.to_string()));
+                lines.push(Line::from(format!("    {}", line)));
             }
         }
     }
