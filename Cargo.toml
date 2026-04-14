@@ -1,7 +1,18 @@
 [package]
-name = "pantry"
+name = "pantry-tui"
 version = "0.1.0"
 edition = "2024"
+authors = ["James Tan <james_tan97@outlook.com>"]
+description = "A TUI cookbook for managing and executing reusable shell snippets"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jamestjw/pantry"
+readme = "README.md"
+keywords = ["tui", "cli", "shell", "productivity", "cookbook"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "pantry"
+path = "src/main.rs"
 
 [dependencies]
 arboard = "3.6"
