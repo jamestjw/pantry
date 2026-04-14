@@ -7,8 +7,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
@@ -65,7 +65,7 @@ impl App {
             recipes,
             query: String::new(),
             selected: 0,
-            status: String::from("Press / to search recipes"),
+            status: String::new(),
             mode: Mode::Normal,
             last_run: None,
         }
@@ -137,6 +137,7 @@ impl App {
             values: HashMap::new(),
             input: String::new(),
         });
+        self.status.clear();
     }
 
     fn execute_action(
@@ -232,7 +233,7 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Char('r') => app.reload(),
         KeyCode::Char('/') => {
             app.mode = Mode::Search;
-            app.status = "Search mode".to_string();
+            app.status.clear();
         }
         _ => {}
     }
@@ -255,11 +256,23 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
-            app.status = "Navigation mode".to_string();
+            app.status.clear();
         }
-        KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
-        KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
-        KeyCode::Enter => app.start_action(Action::Run),
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.mode = Mode::Normal;
+            app.status.clear();
+            app.move_selection(-1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.mode = Mode::Normal;
+            app.status.clear();
+            app.move_selection(1);
+        }
+        KeyCode::Enter => {
+            app.mode = Mode::Normal;
+            app.status.clear();
+            app.start_action(Action::Run);
+        }
         KeyCode::Backspace => {
             app.query.pop();
             app.selected = 0;
@@ -317,7 +330,6 @@ fn render(frame: &mut Frame, app: &App) {
             Constraint::Length(3),
             Constraint::Min(5),
             Constraint::Length(3),
-            Constraint::Length(3),
         ])
         .split(frame.area());
 
@@ -366,10 +378,6 @@ fn render(frame: &mut Frame, app: &App) {
         .wrap(Wrap { trim: false });
     frame.render_widget(details, body[1]);
 
-    let status = Paragraph::new(app.status.clone())
-        .block(Block::default().borders(Borders::ALL).title("Status"));
-    frame.render_widget(status, layout[2]);
-
     let shortcut_text = match app.mode {
         Mode::Normal => "Normal: / search | Enter run | Ctrl+Y copy | r reload | q / Ctrl+C quit",
         Mode::Search => {
@@ -377,13 +385,60 @@ fn render(frame: &mut Frame, app: &App) {
         }
         Mode::Prompt(_) => "Prompt: type value | Enter continue | Esc cancel",
     };
+    let footer = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(10), Constraint::Length(20)])
+        .split(layout[2]);
     let shortcuts = Paragraph::new(Line::from(shortcut_text))
         .block(Block::default().borders(Borders::ALL).title("Shortcuts"))
         .wrap(Wrap { trim: true });
-    frame.render_widget(shortcuts, layout[3]);
+    frame.render_widget(shortcuts, footer[0]);
+
+    let (state_text, state_style) = footer_state(app);
+    let state = Paragraph::new(Line::from(state_text).style(state_style))
+        .block(Block::default().borders(Borders::ALL).title("State"))
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+    frame.render_widget(state, footer[1]);
 
     if let Mode::Prompt(prompt) = &app.mode {
         render_prompt(frame, prompt);
+    }
+}
+
+fn footer_state(app: &App) -> (&str, Style) {
+    if app.status.starts_with("Clipboard error:") {
+        return ("COPY ERROR", Style::default().fg(Color::Red));
+    }
+    if app.status.starts_with("Reload failed:") {
+        return ("RELOAD ERROR", Style::default().fg(Color::Red));
+    }
+    if app.status == "Command terminated by signal" {
+        return ("SIGNAL", Style::default().fg(Color::Red));
+    }
+    if app.status.starts_with("Command exited with code") {
+        return ("RUN FAILED", Style::default().fg(Color::Red));
+    }
+    if app.status.starts_with("Copied:") {
+        return ("COPIED!", Style::default().fg(Color::LightGreen));
+    }
+    if app.status == "Reloaded recipes" {
+        return ("RELOADED", Style::default().fg(Color::Cyan));
+    }
+    if app.status.starts_with("Ran successfully:") {
+        return ("RAN", Style::default().fg(Color::LightGreen));
+    }
+    if app.status == "No recipe selected" {
+        return ("NO RECIPE", Style::default().fg(Color::Yellow));
+    }
+    if app.status == "Cancelled" {
+        return ("CANCELLED", Style::default().fg(Color::Yellow));
+    }
+
+    match app.mode {
+        Mode::Normal => ("NORMAL", Style::default().fg(Color::Blue)),
+        Mode::Search => ("SEARCH", Style::default().fg(Color::Yellow)),
+        Mode::Prompt(_) => ("PROMPT", Style::default().fg(Color::Magenta)),
     }
 }
 
