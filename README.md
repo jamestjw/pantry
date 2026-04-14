@@ -34,10 +34,11 @@ Use placeholders in braces (`{branch}`, `{service}`, etc.). Pantry prompts for v
 
 ## Keybindings
 
-- Type to search recipes
+- `/`: enter search mode
+- `Esc`: leave search mode
+- Type while in search mode to filter recipes
 - `up/down` or `j/k`: move selection
 - `Enter`: run selected command
-- `c`: copy selected command to clipboard
+- `Ctrl+Y`: copy selected command to clipboard
 - `r`: reload recipe files
-- `Esc` or `/`: clear search
 - `q` or `Ctrl+C`: quit

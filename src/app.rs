@@ -33,6 +33,7 @@ struct App {
 
 enum Mode {
     Normal,
+    Search,
     Prompt(PromptState),
 }
 
@@ -64,7 +65,7 @@ impl App {
             recipes,
             query: String::new(),
             selected: 0,
-            status: String::from("Type to search. Enter: run, c: copy, r: reload, q: quit"),
+            status: String::from("Press / to search recipes"),
             mode: Mode::Normal,
             last_run: None,
         }
@@ -198,6 +199,11 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> io::Result
                     break;
                 }
             }
+            Mode::Search => {
+                if handle_search_key(&mut app, key) {
+                    break;
+                }
+            }
             Mode::Prompt(_) => {
                 handle_prompt_key(&mut app, key);
             }
@@ -212,21 +218,48 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
         return true;
     }
 
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('y')) {
+        app.start_action(Action::Copy);
+        app.reset_selection_if_needed();
+        return false;
+    }
+
     match key.code {
         KeyCode::Char('q') => return true,
         KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
         KeyCode::Enter => app.start_action(Action::Run),
-        KeyCode::Char('c') => app.start_action(Action::Copy),
         KeyCode::Char('r') => app.reload(),
         KeyCode::Char('/') => {
-            app.query.clear();
-            app.selected = 0;
+            app.mode = Mode::Search;
+            app.status = "Search mode".to_string();
         }
+        _ => {}
+    }
+
+    app.reset_selection_if_needed();
+    false
+}
+
+fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+        return true;
+    }
+
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('y')) {
+        app.start_action(Action::Copy);
+        app.reset_selection_if_needed();
+        return false;
+    }
+
+    match key.code {
         KeyCode::Esc => {
-            app.query.clear();
-            app.selected = 0;
+            app.mode = Mode::Normal;
+            app.status = "Navigation mode".to_string();
         }
+        KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
+        KeyCode::Enter => app.start_action(Action::Run),
         KeyCode::Backspace => {
             app.query.pop();
             app.selected = 0;
@@ -283,17 +316,20 @@ fn render(frame: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(5),
-            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Length(3),
         ])
         .split(frame.area());
 
     let filtered = app.filtered_indices();
 
-    let search = Paragraph::new(app.query.clone()).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Search (/ to clear)"),
-    );
+    let search_title = match app.mode {
+        Mode::Normal => "Search (/ to edit)",
+        Mode::Search => "Search (Esc to stop editing)",
+        Mode::Prompt(_) => "Search",
+    };
+    let search = Paragraph::new(app.query.clone())
+        .block(Block::default().borders(Borders::ALL).title(search_title));
     frame.render_widget(search, layout[0]);
 
     let body = Layout::default()
@@ -333,6 +369,18 @@ fn render(frame: &mut Frame, app: &App) {
     let status = Paragraph::new(app.status.clone())
         .block(Block::default().borders(Borders::ALL).title("Status"));
     frame.render_widget(status, layout[2]);
+
+    let shortcut_text = match app.mode {
+        Mode::Normal => "Normal: / search | Enter run | Ctrl+Y copy | r reload | q / Ctrl+C quit",
+        Mode::Search => {
+            "Search: type filter | Up/Down move | Enter run | Ctrl+Y copy | Esc stop editing"
+        }
+        Mode::Prompt(_) => "Prompt: type value | Enter continue | Esc cancel",
+    };
+    let shortcuts = Paragraph::new(Line::from(shortcut_text))
+        .block(Block::default().borders(Borders::ALL).title("Shortcuts"))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(shortcuts, layout[3]);
 
     if let Mode::Prompt(prompt) = &app.mode {
         render_prompt(frame, prompt);
