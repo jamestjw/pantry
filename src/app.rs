@@ -703,15 +703,11 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
     let (title, text) = match prompt.stage {
         PromptStage::ChoosePreset => {
             let title = match prompt.action {
-                Action::Run => "Choose preset to run",
-                Action::Copy { quit_after: false } => "Choose preset to copy",
-                Action::Copy { quit_after: true } => "Choose preset to copy and quit",
+                Action::Run => " Choose preset to run ",
+                Action::Copy { quit_after: false } => " Choose preset to copy ",
+                Action::Copy { quit_after: true } => " Choose preset to copy and quit ",
             };
             let mut lines = Vec::new();
-            lines.push(
-                "Use Up/Down to choose a preset, Enter to continue, Esc to cancel".to_string(),
-            );
-            lines.push(String::new());
             for (idx, preset) in prompt.presets.iter().enumerate() {
                 let marker = if idx == prompt.selected_preset {
                     ">"
@@ -726,22 +722,16 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
                 " "
             };
             lines.push(format!("{} Custom values", custom_marker));
+
             (title, Text::from(lines.join("\n")))
         }
         PromptStage::InputValues => {
             let title = match prompt.action {
-                Action::Run => "Fill placeholders to run",
-                Action::Copy { quit_after: false } => "Fill placeholders to copy",
-                Action::Copy { quit_after: true } => "Fill placeholders to copy and quit",
+                Action::Run => " Fill placeholders to run ",
+                Action::Copy { quit_after: false } => " Fill placeholders to copy ",
+                Action::Copy { quit_after: true } => " Fill placeholders to copy and quit ",
             };
-            let mut lines = vec![
-                Line::from(format!(
-                    "Field {}/{} is active",
-                    prompt.current + 1,
-                    prompt.placeholders.len()
-                )),
-                Line::from(String::new()),
-            ];
+            let mut lines = Vec::new();
 
             for (idx, placeholder) in prompt.placeholders.iter().enumerate() {
                 let value = if idx < prompt.current {
@@ -769,15 +759,25 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
                 lines.push(line);
             }
 
-            lines.push(Line::from(String::new()));
-            lines.push(Line::from("Enter to continue, Esc to cancel"));
             (title, Text::from(lines))
         }
     };
 
-    let popup = Paragraph::new(text)
-        .block(Block::default().title(title).borders(Borders::ALL))
-        .wrap(Wrap { trim: false });
+    let footer_text = match prompt.stage {
+        PromptStage::ChoosePreset => " Enter select | Esc cancel ",
+        PromptStage::InputValues => " Enter accept | Esc cancel ",
+    };
+
+    let block = Block::default()
+        .title(title)
+        .title_bottom(
+            Line::from(footer_text)
+                .alignment(Alignment::Right)
+                .style(Style::default().add_modifier(Modifier::DIM)),
+        )
+        .borders(Borders::ALL);
+
+    let popup = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     frame.render_widget(popup, area);
 }
 
