@@ -63,6 +63,14 @@ presets = ["service=api tag=latest"]
 
 This is usually the most readable format for Pantry recipes, and placeholders still work across newlines.
 
+If you need to use literal `{` or `}` characters in a command, you can escape them by doubling them: `{{` or `}}`.
+
+```toml
+[[recipe]]
+name = "literal braces example"
+command = "echo {{this is literal}} and {this_is_a_placeholder}"
+```
+
 ## Keybindings
 
 - `/`: enter search mode

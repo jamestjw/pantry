@@ -6,6 +6,10 @@ pub fn placeholders(command: &str) -> Vec<String> {
     let mut i = 0usize;
     while i < chars.len() {
         if chars[i] == '{' {
+            if i + 1 < chars.len() && chars[i + 1] == '{' {
+                i += 2;
+                continue;
+            }
             let mut j = i + 1;
             while j < chars.len() && chars[j] != '}' {
                 j += 1;
@@ -30,6 +34,11 @@ pub fn render(command: &str, values: &HashMap<String, String>) -> String {
     let mut i = 0usize;
     while i < chars.len() {
         if chars[i] == '{' {
+            if i + 1 < chars.len() && chars[i + 1] == '{' {
+                out.push('{');
+                i += 2;
+                continue;
+            }
             let mut j = i + 1;
             while j < chars.len() && chars[j] != '}' {
                 j += 1;
@@ -41,6 +50,12 @@ pub fn render(command: &str, values: &HashMap<String, String>) -> String {
                     i = j + 1;
                     continue;
                 }
+            }
+        } else if chars[i] == '}' {
+            if i + 1 < chars.len() && chars[i + 1] == '}' {
+                out.push('}');
+                i += 2;
+                continue;
             }
         }
         out.push(chars[i]);
@@ -98,5 +113,17 @@ mod tests {
         let got = parse_assignment_values("branch=main remote=origin");
         assert_eq!(got.get("branch"), Some(&"main".to_string()));
         assert_eq!(got.get("remote"), Some(&"origin".to_string()));
+    }
+
+    #[test]
+    fn handles_escaped_braces() {
+        let command = "echo {{not_a_placeholder}} {is_placeholder} }}";
+        let found = placeholders(command);
+        assert_eq!(found, vec!["is_placeholder".to_string()]);
+
+        let mut values = HashMap::new();
+        values.insert("is_placeholder".to_string(), "fixed".to_string());
+        let rendered = render(command, &values);
+        assert_eq!(rendered, "echo {not_a_placeholder} fixed }");
     }
 }
