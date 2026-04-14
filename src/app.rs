@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io;
+use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -33,6 +34,7 @@ struct App {
     last_run: Option<RunOutput>,
     running_command: Option<RunningCommand>,
     spinner_frame: usize,
+    clipboard: Option<arboard::Clipboard>,
 }
 
 enum Mode {
@@ -78,6 +80,7 @@ impl App {
             last_run: None,
             running_command: None,
             spinner_frame: 0,
+            clipboard: None,
         }
     }
 
@@ -164,7 +167,7 @@ impl App {
         let recipe_name = self.recipes[recipe_idx].name.clone();
         let rendered = template::render(&self.recipes[recipe_idx].command, &values);
         match action {
-            Action::Copy => match copy_to_clipboard(&rendered) {
+            Action::Copy => match self.copy_to_clipboard(&rendered) {
                 Ok(()) => {
                     self.status = format!("Copied: {}", recipe_name);
                 }
@@ -183,6 +186,34 @@ impl App {
                 self.status.clear();
             }
         }
+    }
+
+    fn copy_to_clipboard(&mut self, text: &str) -> io::Result<()> {
+        if try_copy_with_command(text, "wl-copy", &[]).is_ok() {
+            return Ok(());
+        }
+        if try_copy_with_command(text, "xclip", &["-selection", "clipboard"]).is_ok() {
+            return Ok(());
+        }
+        if try_copy_with_command(text, "xsel", &["--clipboard", "--input"]).is_ok() {
+            return Ok(());
+        }
+        if try_copy_with_command(text, "pbcopy", &[]).is_ok() {
+            return Ok(());
+        }
+
+        if self.clipboard.is_none() {
+            self.clipboard = Some(
+                arboard::Clipboard::new()
+                    .map_err(|err| io::Error::other(format!("failed to open clipboard: {err}")))?,
+            );
+        }
+
+        self.clipboard
+            .as_mut()
+            .expect("clipboard should exist after initialization")
+            .set_text(text.to_string())
+            .map_err(|err| io::Error::other(format!("failed to copy text: {err}")))
     }
 
     fn poll_running_command(&mut self) {
@@ -602,12 +633,26 @@ fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
-fn copy_to_clipboard(text: &str) -> io::Result<()> {
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|err| io::Error::other(format!("failed to open clipboard: {err}")))?;
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|err| io::Error::other(format!("failed to copy text: {err}")))
+fn try_copy_with_command(text: &str, program: &str, args: &[&str]) -> io::Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(text.as_bytes())?;
+    }
+
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "{program} exited with status {status}"
+        )))
+    }
 }
 
 fn run_command(command: &str) -> RunOutput {
