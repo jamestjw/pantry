@@ -6,16 +6,16 @@ use std::thread;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use ratatui::Frame;
+use fuzzy_matcher::FuzzyMatcher;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::Frame;
 
 use crate::clipboard::ClipboardProvider;
-use crate::model::{Recipe, reload_recipes};
+use crate::model::{reload_recipes, Recipe};
 use crate::template;
 
 pub fn run(recipes: Vec<Recipe>) -> io::Result<()> {
@@ -150,7 +150,7 @@ impl App {
             return false;
         };
         let recipe = &self.recipes[recipe_idx];
-        let placeholders = template::placeholders(&recipe.command);
+        let placeholders = recipe.compiled.placeholders();
         if placeholders.is_empty() {
             return self.execute_action(action, recipe_idx, HashMap::new());
         }
@@ -179,8 +179,9 @@ impl App {
         recipe_idx: usize,
         values: HashMap<String, String>,
     ) -> bool {
-        let recipe_name = self.recipes[recipe_idx].name.clone();
-        let rendered = template::render(&self.recipes[recipe_idx].command, &values);
+        let recipe = &self.recipes[recipe_idx];
+        let recipe_name = recipe.name.clone();
+        let rendered = recipe.compiled.render(&values);
         match action {
             Action::Copy { quit_after } => match self.copy_to_clipboard(&rendered) {
                 Ok(()) => {

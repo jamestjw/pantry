@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::template::Template;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recipe {
     pub name: String,
@@ -18,6 +20,8 @@ pub struct Recipe {
     pub safety: String,
     #[serde(skip)]
     pub source: String,
+    #[serde(skip)]
+    pub compiled: Template,
 }
 
 fn default_safety() -> String {
@@ -78,6 +82,7 @@ fn parse_recipe_file(path: &Path) -> io::Result<Vec<Recipe>> {
     let source = path.display().to_string();
     for recipe in &mut parsed.recipe {
         recipe.source = source.clone();
+        recipe.compiled = Template::parse(&recipe.command);
     }
     Ok(parsed.recipe)
 }

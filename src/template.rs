@@ -9,12 +9,58 @@ use nom::{
 };
 use std::collections::{BTreeSet, HashMap};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 enum Part {
     Literal(String),
     Placeholder(String),
     EscapedOpen,
     EscapedClose,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Template {
+    parts: Vec<Part>,
+}
+
+impl Template {
+    pub fn parse(input: &str) -> Self {
+        let parts = match parse_template(input) {
+            Ok((_, parts)) => parts,
+            Err(_) => vec![Part::Literal(input.to_string())],
+        };
+        Self { parts }
+    }
+
+    pub fn placeholders(&self) -> Vec<String> {
+        let mut found = BTreeSet::new();
+        for part in &self.parts {
+            if let Part::Placeholder(name) = part {
+                found.insert(name.clone());
+            }
+        }
+        found.into_iter().collect()
+    }
+
+    pub fn render(&self, values: &HashMap<String, String>) -> String {
+        let mut out = String::new();
+        for part in &self.parts {
+            match part {
+                Part::Literal(s) => out.push_str(s),
+                Part::Placeholder(name) => {
+                    if let Some(value) = values.get(name) {
+                        out.push_str(value);
+                    } else {
+                        out.push('{');
+                        out.push_str(name);
+                        out.push('}');
+                    }
+                }
+                Part::EscapedOpen => out.push('{'),
+                Part::EscapedClose => out.push('}'),
+            }
+        }
+        out
+    }
 }
 
 fn parse_placeholder(input: &str) -> IResult<&str, Part> {
@@ -62,41 +108,6 @@ fn is_valid_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-'
 }
 
-pub fn placeholders(command: &str) -> Vec<String> {
-    let mut found = BTreeSet::new();
-    if let Ok((_, parts)) = parse_template(command) {
-        for part in parts {
-            if let Part::Placeholder(name) = part {
-                found.insert(name);
-            }
-        }
-    }
-    found.into_iter().collect()
-}
-
-pub fn render(command: &str, values: &HashMap<String, String>) -> String {
-    let mut out = String::new();
-    if let Ok((_, parts)) = parse_template(command) {
-        for part in parts {
-            match part {
-                Part::Literal(s) => out.push_str(&s),
-                Part::Placeholder(name) => {
-                    if let Some(value) = values.get(&name) {
-                        out.push_str(value);
-                    } else {
-                        out.push('{');
-                        out.push_str(&name);
-                        out.push('}');
-                    }
-                }
-                Part::EscapedOpen => out.push('{'),
-                Part::EscapedClose => out.push('}'),
-            }
-        }
-    }
-    out
-}
-
 fn parse_assignment(input: &str) -> IResult<&str, (String, String)> {
     map(
         separated_pair(
@@ -129,7 +140,8 @@ mod tests {
 
     #[test]
     fn extracts_unique_placeholders() {
-        let got = placeholders("git checkout {branch} && git pull {remote} {branch}");
+        let template = Template::parse("git checkout {branch} && git pull {remote} {branch}");
+        let got = template.placeholders();
         assert_eq!(got, vec!["branch".to_string(), "remote".to_string()]);
     }
 
@@ -138,7 +150,8 @@ mod tests {
         let mut values = HashMap::new();
         values.insert("branch".to_string(), "main".to_string());
         values.insert("remote".to_string(), "origin".to_string());
-        let got = render("git pull {remote} {branch}", &values);
+        let template = Template::parse("git pull {remote} {branch}");
+        let got = template.render(&values);
         assert_eq!(got, "git pull origin main");
     }
 
@@ -152,32 +165,35 @@ mod tests {
     #[test]
     fn handles_escaped_braces() {
         let command = "echo {{not_a_placeholder}} {is_placeholder} }}";
-        let found = placeholders(command);
+        let template = Template::parse(command);
+        let found = template.placeholders();
         assert_eq!(found, vec!["is_placeholder".to_string()]);
 
         let mut values = HashMap::new();
         values.insert("is_placeholder".to_string(), "fixed".to_string());
-        let rendered = render(command, &values);
+        let rendered = template.render(&values);
         assert_eq!(rendered, "echo {not_a_placeholder} fixed }");
     }
 
     #[test]
     fn handles_complex_template() {
         let command = "ls {dir} {{literal}} {file}";
-        let found = placeholders(command);
+        let template = Template::parse(command);
+        let found = template.placeholders();
         assert_eq!(found, vec!["dir".to_string(), "file".to_string()]);
 
         let mut values = HashMap::new();
         values.insert("dir".to_string(), "/tmp".to_string());
         values.insert("file".to_string(), "test.txt".to_string());
-        let rendered = render(command, &values);
+        let rendered = template.render(&values);
         assert_eq!(rendered, "ls /tmp {literal} test.txt");
     }
 
     #[test]
     fn handles_multiline_commands() {
         let command = "git commit -m \"{message}\"\ngit push {remote} {branch}";
-        let found = placeholders(command);
+        let template = Template::parse(command);
+        let found = template.placeholders();
         assert_eq!(
             found,
             vec![
@@ -192,7 +208,7 @@ mod tests {
         values.insert("remote".to_string(), "origin".to_string());
         values.insert("branch".to_string(), "main".to_string());
 
-        let rendered = render(command, &values);
+        let rendered = template.render(&values);
         assert_eq!(
             rendered,
             "git commit -m \"feat: add tests\"\ngit push origin main"
@@ -209,12 +225,13 @@ mod tests {
     #[test]
     fn handles_newlines_at_edges() {
         let command = "\n{cmd}\n";
-        let found = placeholders(command);
+        let template = Template::parse(command);
+        let found = template.placeholders();
         assert_eq!(found, vec!["cmd".to_string()]);
 
         let mut values = HashMap::new();
         values.insert("cmd".to_string(), "ls".to_string());
-        let rendered = render(command, &values);
+        let rendered = template.render(&values);
         assert_eq!(rendered, "\nls\n");
     }
 }
