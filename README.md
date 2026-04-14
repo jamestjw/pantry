@@ -45,6 +45,8 @@ examples = ["branch=main"]
 
 Use placeholders in braces (`{branch}`, `{service}`, etc.). Pantry prompts for values before running/copying.
 
+`examples` are shown in the details pane as sample placeholder assignments. For commands with multiple placeholders, include all values in a single example string, for example `"service=api env=prod"` or `"branch=main remote=origin"`.
+
 ## Keybindings
 
 - `/`: enter search mode

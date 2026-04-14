@@ -36,12 +36,7 @@ tags = ["git", "sync"]
 description = "Fetch and rebase current branch onto origin/{branch}."
 command = "git fetch origin && git rebase origin/{branch}"
 safety = "confirm"
-
-[[recipe]]
-name = "run tests for package"
-tags = ["tests"]
-description = "Run tests for a cargo package"
-command = "cargo test -p {package}"
+examples = ["branch=main"]
 "#;
 
 pub fn load_recipes() -> io::Result<Vec<Recipe>> {
