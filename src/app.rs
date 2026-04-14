@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::io;
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Duration;
@@ -15,12 +14,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
+use crate::clipboard::ClipboardProvider;
 use crate::model::{Recipe, reload_recipes};
 use crate::template;
 
 pub fn run(recipes: Vec<Recipe>) -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let result = run_loop(&mut terminal, App::new(recipes));
+    let result = run_loop(&mut terminal, App::new(recipes)?);
     ratatui::restore();
     result
 }
@@ -34,7 +34,7 @@ struct App {
     last_run: Option<RunOutput>,
     running_command: Option<RunningCommand>,
     spinner_frame: usize,
-    clipboard: Option<arboard::Clipboard>,
+    clipboard: ClipboardProvider,
 }
 
 enum Mode {
@@ -70,8 +70,8 @@ struct RunningCommand {
 }
 
 impl App {
-    fn new(recipes: Vec<Recipe>) -> Self {
-        Self {
+    fn new(recipes: Vec<Recipe>) -> io::Result<Self> {
+        Ok(Self {
             recipes,
             query: String::new(),
             selected: 0,
@@ -80,8 +80,8 @@ impl App {
             last_run: None,
             running_command: None,
             spinner_frame: 0,
-            clipboard: None,
-        }
+            clipboard: ClipboardProvider::detect()?,
+        })
     }
 
     fn filtered_indices(&self) -> Vec<usize> {
@@ -189,31 +189,7 @@ impl App {
     }
 
     fn copy_to_clipboard(&mut self, text: &str) -> io::Result<()> {
-        if try_copy_with_command(text, "wl-copy", &[]).is_ok() {
-            return Ok(());
-        }
-        if try_copy_with_command(text, "xclip", &["-selection", "clipboard"]).is_ok() {
-            return Ok(());
-        }
-        if try_copy_with_command(text, "xsel", &["--clipboard", "--input"]).is_ok() {
-            return Ok(());
-        }
-        if try_copy_with_command(text, "pbcopy", &[]).is_ok() {
-            return Ok(());
-        }
-
-        if self.clipboard.is_none() {
-            self.clipboard = Some(
-                arboard::Clipboard::new()
-                    .map_err(|err| io::Error::other(format!("failed to open clipboard: {err}")))?,
-            );
-        }
-
-        self.clipboard
-            .as_mut()
-            .expect("clipboard should exist after initialization")
-            .set_text(text.to_string())
-            .map_err(|err| io::Error::other(format!("failed to copy text: {err}")))
+        self.clipboard.copy(text)
     }
 
     fn poll_running_command(&mut self) {
@@ -631,28 +607,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
-}
-
-fn try_copy_with_command(text: &str, program: &str, args: &[&str]) -> io::Result<()> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin.write_all(text.as_bytes())?;
-    }
-
-    let status = child.wait()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "{program} exited with status {status}"
-        )))
-    }
 }
 
 fn run_command(command: &str) -> RunOutput {

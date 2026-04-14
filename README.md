@@ -18,6 +18,19 @@ It also loads optional local recipes from:
 
 `./.pantry.toml`
 
+## Clipboard
+
+Pantry copies commands through a system clipboard provider.
+
+- Preferred providers:
+  - Wayland: `wl-copy`
+  - X11: `xclip` or `xsel`
+  - macOS: `pbcopy`
+- If one of those is installed, Pantry will use it first.
+- If none are available, Pantry falls back to `arboard`.
+
+`arboard` works as a fallback, but on some Linux setups clipboard ownership can stay tied to the running app. That means copied text may not remain available after Pantry exits, or clipboard behavior may be less reliable than with `wl-copy`, `xclip`, or `xsel`.
+
 ## Recipe format
 
 ```toml
