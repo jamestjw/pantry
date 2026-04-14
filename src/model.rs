@@ -12,8 +12,8 @@ pub struct Recipe {
     #[serde(default)]
     pub description: String,
     pub command: String,
-    #[serde(default)]
-    pub examples: Vec<String>,
+    #[serde(default, alias = "examples")]
+    pub presets: Vec<String>,
     #[serde(default = "default_safety")]
     pub safety: String,
     #[serde(skip)]
@@ -36,7 +36,7 @@ tags = ["git", "sync"]
 description = "Fetch and rebase current branch onto origin/{branch}."
 command = "git fetch origin && git rebase origin/{branch}"
 safety = "confirm"
-examples = ["branch=main"]
+presets = ["branch=main"]
 "#;
 
 pub fn load_recipes() -> io::Result<Vec<Recipe>> {

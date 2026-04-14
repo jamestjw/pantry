@@ -49,6 +49,22 @@ pub fn render(command: &str, values: &HashMap<String, String>) -> String {
     out
 }
 
+pub fn parse_assignment_values(input: &str) -> HashMap<String, String> {
+    let mut values = HashMap::new();
+
+    for token in input.split_whitespace() {
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+
+        if is_valid_name(key) && !value.is_empty() {
+            values.insert(key.to_string(), value.to_string());
+        }
+    }
+
+    values
+}
+
 fn is_valid_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -60,7 +76,7 @@ fn is_valid_name(name: &str) -> bool {
 mod tests {
     use std::collections::HashMap;
 
-    use super::{placeholders, render};
+    use super::{parse_assignment_values, placeholders, render};
 
     #[test]
     fn extracts_unique_placeholders() {
@@ -75,5 +91,12 @@ mod tests {
         values.insert("remote".to_string(), "origin".to_string());
         let got = render("git pull {remote} {branch}", &values);
         assert_eq!(got, "git pull origin main");
+    }
+
+    #[test]
+    fn parses_assignment_values() {
+        let got = parse_assignment_values("branch=main remote=origin");
+        assert_eq!(got.get("branch"), Some(&"main".to_string()));
+        assert_eq!(got.get("remote"), Some(&"origin".to_string()));
     }
 }

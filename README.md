@@ -40,12 +40,12 @@ tags = ["git", "sync"]
 description = "Fetch and rebase current branch onto origin/{branch}."
 command = "git fetch origin && git rebase origin/{branch}"
 safety = "confirm"
-examples = ["branch=main"]
+presets = ["branch=main"]
 ```
 
 Use placeholders in braces (`{branch}`, `{service}`, etc.). Pantry prompts for values before running/copying.
 
-`examples` are shown in the details pane as sample placeholder assignments. For commands with multiple placeholders, include all values in a single example string, for example `"service=api env=prod"` or `"branch=main remote=origin"`.
+You can define `presets` as ready-made placeholder assignments. For commands with multiple placeholders, include all values in a single preset string, for example `"service=api env=prod"` or `"branch=main remote=origin"`. At runtime Pantry lets you choose a preset or enter custom values manually.
 
 ## Keybindings
 

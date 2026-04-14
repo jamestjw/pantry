@@ -50,6 +50,14 @@ struct PromptState {
     current: usize,
     values: HashMap<String, String>,
     input: String,
+    presets: Vec<String>,
+    selected_preset: usize,
+    stage: PromptStage,
+}
+
+enum PromptStage {
+    ChoosePreset,
+    InputValues,
 }
 
 #[derive(Copy, Clone)]
@@ -154,6 +162,13 @@ impl App {
             current: 0,
             values: HashMap::new(),
             input: String::new(),
+            presets: recipe.presets.clone(),
+            selected_preset: 0,
+            stage: if recipe.presets.is_empty() {
+                PromptStage::InputValues
+            } else {
+                PromptStage::ChoosePreset
+            },
         });
         self.status.clear();
     }
@@ -352,31 +367,74 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
 
 fn handle_prompt_key(app: &mut App, key: KeyEvent) {
     let mut execute: Option<(Action, usize, HashMap<String, String>)> = None;
+    let mut status: Option<String> = None;
 
     if let Mode::Prompt(prompt) = &mut app.mode {
-        match key.code {
-            KeyCode::Esc => {
-                app.mode = Mode::Normal;
-                app.status = "Cancelled".to_string();
-                return;
-            }
-            KeyCode::Backspace => {
-                prompt.input.pop();
-            }
-            KeyCode::Enter => {
-                let key_name = prompt.placeholders[prompt.current].clone();
-                prompt.values.insert(key_name, prompt.input.clone());
-                prompt.input.clear();
-                prompt.current += 1;
-                if prompt.current >= prompt.placeholders.len() {
-                    execute = Some((prompt.action, prompt.recipe_idx, prompt.values.clone()));
+        match prompt.stage {
+            PromptStage::ChoosePreset => match key.code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                    app.status = "Cancelled".to_string();
+                    return;
                 }
-            }
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                prompt.input.push(ch);
-            }
-            _ => {}
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if prompt.selected_preset > 0 {
+                        prompt.selected_preset -= 1;
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if prompt.selected_preset < prompt.presets.len() {
+                        prompt.selected_preset += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    if prompt.selected_preset < prompt.presets.len() {
+                        let values = template::parse_assignment_values(
+                            &prompt.presets[prompt.selected_preset],
+                        );
+                        if let Some(missing) = prompt
+                            .placeholders
+                            .iter()
+                            .find(|placeholder| !values.contains_key(*placeholder))
+                        {
+                            status = Some(format!("Preset missing value for {{{missing}}}"));
+                        } else {
+                            execute = Some((prompt.action, prompt.recipe_idx, values));
+                        }
+                    } else {
+                        prompt.stage = PromptStage::InputValues;
+                    }
+                }
+                _ => {}
+            },
+            PromptStage::InputValues => match key.code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                    app.status = "Cancelled".to_string();
+                    return;
+                }
+                KeyCode::Backspace => {
+                    prompt.input.pop();
+                }
+                KeyCode::Enter => {
+                    let key_name = prompt.placeholders[prompt.current].clone();
+                    prompt.values.insert(key_name, prompt.input.clone());
+                    prompt.input.clear();
+                    prompt.current += 1;
+                    if prompt.current >= prompt.placeholders.len() {
+                        execute = Some((prompt.action, prompt.recipe_idx, prompt.values.clone()));
+                    }
+                }
+                KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    prompt.input.push(ch);
+                }
+                _ => {}
+            },
         }
+    }
+
+    if let Some(status) = status {
+        app.status = status;
     }
 
     if let Some((action, recipe_idx, values)) = execute {
@@ -534,14 +592,15 @@ fn recipe_details(app: &App, filtered: &[usize]) -> Text<'static> {
         Line::from(recipe.description.clone()),
         Line::from(String::new()),
         Line::from("Command:"),
-        Line::from(recipe.command.clone()),
     ];
 
-    if !recipe.examples.is_empty() {
+    lines.push(Line::from(recipe.command.clone()));
+
+    if !recipe.presets.is_empty() {
         lines.push(Line::from(String::new()));
-        lines.push(Line::from("Examples:"));
-        for example in &recipe.examples {
-            lines.push(Line::from(format!("- {}", example)));
+        lines.push(Line::from("Presets:"));
+        for preset in &recipe.presets {
+            lines.push(Line::from(format!("- {}", preset)));
         }
     }
 
@@ -571,18 +630,51 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
     let area = centered_rect(60, 20, frame.area());
     frame.render_widget(Clear, area);
 
-    let field = &prompt.placeholders[prompt.current];
-    let title = match prompt.action {
-        Action::Run => "Fill placeholders to run",
-        Action::Copy => "Fill placeholders to copy",
+    let (title, text) = match prompt.stage {
+        PromptStage::ChoosePreset => {
+            let title = match prompt.action {
+                Action::Run => "Choose preset to run",
+                Action::Copy => "Choose preset to copy",
+            };
+            let mut lines = Vec::new();
+            lines.push(
+                "Use Up/Down to choose a preset, Enter to continue, Esc to cancel".to_string(),
+            );
+            lines.push(String::new());
+            for (idx, preset) in prompt.presets.iter().enumerate() {
+                let marker = if idx == prompt.selected_preset {
+                    ">"
+                } else {
+                    " "
+                };
+                lines.push(format!("{} {}", marker, preset));
+            }
+            let custom_marker = if prompt.selected_preset == prompt.presets.len() {
+                ">"
+            } else {
+                " "
+            };
+            lines.push(format!("{} Custom values", custom_marker));
+            (title, Text::from(lines.join("\n")))
+        }
+        PromptStage::InputValues => {
+            let field = &prompt.placeholders[prompt.current];
+            let title = match prompt.action {
+                Action::Run => "Fill placeholders to run",
+                Action::Copy => "Fill placeholders to copy",
+            };
+            (
+                title,
+                Text::from(format!(
+                    "Value for {{{}}} ({}/{}):\n{}\n\nEnter to continue, Esc to cancel",
+                    field,
+                    prompt.current + 1,
+                    prompt.placeholders.len(),
+                    prompt.input
+                )),
+            )
+        }
     };
-    let text = format!(
-        "Value for {{{}}} ({}/{}):\n{}\n\nEnter to continue, Esc to cancel",
-        field,
-        prompt.current + 1,
-        prompt.placeholders.len(),
-        prompt.input
-    );
 
     let popup = Paragraph::new(text)
         .block(Block::default().title(title).borders(Borders::ALL))
