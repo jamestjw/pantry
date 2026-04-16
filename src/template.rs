@@ -1,11 +1,11 @@
 use nom::{
+    IResult, Parser,
     branch::alt,
     bytes::complete::{tag, take_while1},
     character::complete::{multispace0, multispace1},
     combinator::map,
     multi::{many0, separated_list0},
     sequence::{delimited, separated_pair},
-    IResult, Parser,
 };
 use std::collections::{BTreeSet, HashMap};
 

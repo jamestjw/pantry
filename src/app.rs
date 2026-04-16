@@ -6,16 +6,16 @@ use std::thread;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
-use ratatui::Frame;
 
 use crate::clipboard::ClipboardProvider;
-use crate::model::{reload_recipes, Recipe, RunOutput};
+use crate::model::{Recipe, RunOutput, reload_recipes};
 use crate::template;
 
 pub fn run(recipes: Vec<Recipe>) -> io::Result<()> {
@@ -29,11 +29,27 @@ struct App {
     recipes: Vec<Recipe>,
     query: String,
     selected: usize,
-    status: String,
+    status: Status,
     mode: Mode,
     running_command: Option<RunningCommand>,
     spinner_frame: usize,
     clipboard: ClipboardProvider,
+}
+
+#[derive(Copy, Clone)]
+enum Status {
+    Idle,
+    AlreadyRunning,
+    NoRecipeSelected,
+    Copied,
+    CopyError,
+    RanSuccessfully,
+    RunFailed,
+    RunTerminated,
+    RunError,
+    Reloaded,
+    ReloadError,
+    Cancelled,
 }
 
 enum Mode {
@@ -79,7 +95,7 @@ impl App {
             recipes,
             query: String::new(),
             selected: 0,
-            status: String::new(),
+            status: Status::Idle,
             mode: Mode::Normal,
             running_command: None,
             spinner_frame: 0,
@@ -135,13 +151,13 @@ impl App {
 
     fn start_action(&mut self, action: Action) -> bool {
         if matches!(action, Action::Run) && self.running_command.is_some() {
-            self.status = "Already running a command".to_string();
+            self.status = Status::AlreadyRunning;
             return false;
         }
 
         let filtered = self.filtered_indices();
         let Some(recipe_idx) = self.selected_recipe_index(&filtered) else {
-            self.status = "No recipe selected".to_string();
+            self.status = Status::NoRecipeSelected;
             return false;
         };
         let recipe = &self.recipes[recipe_idx];
@@ -167,7 +183,7 @@ impl App {
             },
             error: None,
         });
-        self.status.clear();
+        self.status = Status::Idle;
         false
     }
 
@@ -178,16 +194,16 @@ impl App {
         values: HashMap<String, String>,
     ) -> bool {
         let recipe = &self.recipes[recipe_idx];
-        let recipe_name = recipe.name.clone();
         let rendered = recipe.compiled.render(&values);
         match action {
             Action::Copy { quit_after } => match self.copy_to_clipboard(&rendered) {
                 Ok(()) => {
-                    self.status = format!("Copied: {}", recipe_name);
+                    self.status = Status::Copied;
                     return quit_after;
                 }
                 Err(err) => {
-                    self.status = format!("Clipboard error: {err}");
+                    let _ = err;
+                    self.status = Status::CopyError;
                 }
             },
             Action::Run => {
@@ -201,7 +217,7 @@ impl App {
                     receiver,
                 });
                 self.spinner_frame = 0;
-                self.status.clear();
+                self.status = Status::Idle;
             }
         }
 
@@ -228,16 +244,16 @@ impl App {
 
         if let Some((idx, output)) = finished {
             self.status = match output.code {
-                Some(0) => "Ran successfully".to_string(),
-                Some(code) => format!("Command exited with code {code}"),
-                None => "Command terminated by signal".to_string(),
+                Some(0) => Status::RanSuccessfully,
+                Some(_) => Status::RunFailed,
+                None => Status::RunTerminated,
             };
             if idx < self.recipes.len() {
                 self.recipes[idx].last_run = Some(output);
             }
             self.running_command = None;
         } else if disconnected {
-            self.status = "Command runner disconnected".to_string();
+            self.status = Status::RunError;
             self.running_command = None;
         }
     }
@@ -252,12 +268,10 @@ impl App {
         match reload_recipes() {
             Ok(recipes) => {
                 self.recipes = recipes;
-                self.status = "Reloaded recipes".to_string();
+                self.status = Status::Reloaded;
                 self.reset_selection_if_needed();
             }
-            Err(err) => {
-                self.status = format!("Reload failed: {err}");
-            }
+            Err(_) => self.status = Status::ReloadError,
         }
     }
 }
@@ -344,7 +358,7 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Char('r') => app.reload(),
         KeyCode::Char('/') => {
             app.mode = Mode::Search;
-            app.status.clear();
+            app.status = Status::Idle;
         }
         _ => {}
     }
@@ -361,21 +375,21 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
-            app.status.clear();
+            app.status = Status::Idle;
         }
         KeyCode::Up => {
             app.mode = Mode::Normal;
-            app.status.clear();
+            app.status = Status::Idle;
             app.move_selection(-1);
         }
         KeyCode::Down => {
             app.mode = Mode::Normal;
-            app.status.clear();
+            app.status = Status::Idle;
             app.move_selection(1);
         }
         KeyCode::Enter => {
             app.mode = Mode::Normal;
-            app.status.clear();
+            app.status = Status::Idle;
             app.start_action(Action::Run);
         }
         KeyCode::Backspace => {
@@ -402,7 +416,7 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent) -> bool {
             PromptStage::ChoosePreset => match key.code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
-                    app.status = "Cancelled".to_string();
+                    app.status = Status::Cancelled;
                     return false;
                 }
                 KeyCode::Up => {
@@ -438,7 +452,7 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent) -> bool {
             PromptStage::InputValues => match key.code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
-                    app.status = "Cancelled".to_string();
+                    app.status = Status::Cancelled;
                     return false;
                 }
                 KeyCode::Up => {
@@ -600,47 +614,28 @@ fn footer_state(app: &App) -> (String, Style) {
         return (format!("RUN {spinner}"), Style::default().fg(Color::Cyan));
     }
 
-    if app.status.starts_with("Clipboard error:") {
-        return ("COPY ERROR".to_string(), Style::default().fg(Color::Red));
-    }
-    if app.status.starts_with("Reload failed:") {
-        return ("RELOAD ERROR".to_string(), Style::default().fg(Color::Red));
-    }
-    if app.status == "Command terminated by signal" {
-        return ("SIGNAL".to_string(), Style::default().fg(Color::Red));
-    }
-    if app.status.starts_with("Command exited with code") {
-        return ("RUN FAILED".to_string(), Style::default().fg(Color::Red));
-    }
-    if app.status == "Command runner disconnected" {
-        return ("RUN ERROR".to_string(), Style::default().fg(Color::Red));
-    }
-    if app.status.starts_with("Copied:") {
-        return (
+    match (&app.mode, &app.status) {
+        (_, Status::CopyError) => ("COPY ERROR".to_string(), Style::default().fg(Color::Red)),
+        (_, Status::ReloadError) => ("RELOAD ERROR".to_string(), Style::default().fg(Color::Red)),
+        (_, Status::RunTerminated) => ("SIGNAL".to_string(), Style::default().fg(Color::Red)),
+        (_, Status::RunFailed) => ("RUN FAILED".to_string(), Style::default().fg(Color::Red)),
+        (_, Status::RunError) => ("RUN ERROR".to_string(), Style::default().fg(Color::Red)),
+        (_, Status::Copied) => (
             "COPIED!".to_string(),
             Style::default().fg(Color::LightGreen),
-        );
-    }
-    if app.status == "Reloaded recipes" {
-        return ("RELOADED".to_string(), Style::default().fg(Color::Cyan));
-    }
-    if app.status == "Ran successfully" {
-        return ("RAN".to_string(), Style::default().fg(Color::LightGreen));
-    }
-    if app.status == "No recipe selected" {
-        return ("NO RECIPE".to_string(), Style::default().fg(Color::Yellow));
-    }
-    if app.status == "Cancelled" {
-        return ("CANCELLED".to_string(), Style::default().fg(Color::Yellow));
-    }
-    if app.status == "Already running a command" {
-        return ("RUNNING".to_string(), Style::default().fg(Color::Yellow));
-    }
-
-    match app.mode {
-        Mode::Normal => ("NORMAL".to_string(), Style::default().fg(Color::Blue)),
-        Mode::Search => ("SEARCH".to_string(), Style::default().fg(Color::Yellow)),
-        Mode::Prompt(_) => ("PROMPT".to_string(), Style::default().fg(Color::Magenta)),
+        ),
+        (_, Status::Reloaded) => ("RELOADED".to_string(), Style::default().fg(Color::Cyan)),
+        (_, Status::RanSuccessfully) => ("RAN".to_string(), Style::default().fg(Color::LightGreen)),
+        (_, Status::NoRecipeSelected) => {
+            ("NO RECIPE".to_string(), Style::default().fg(Color::Yellow))
+        }
+        (_, Status::Cancelled) => ("CANCELLED".to_string(), Style::default().fg(Color::Yellow)),
+        (_, Status::AlreadyRunning) => ("RUNNING".to_string(), Style::default().fg(Color::Yellow)),
+        (Mode::Normal, Status::Idle) => ("NORMAL".to_string(), Style::default().fg(Color::Blue)),
+        (Mode::Search, Status::Idle) => ("SEARCH".to_string(), Style::default().fg(Color::Yellow)),
+        (Mode::Prompt(_), Status::Idle) => {
+            ("PROMPT".to_string(), Style::default().fg(Color::Magenta))
+        }
     }
 }
 
