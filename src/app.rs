@@ -28,6 +28,7 @@ pub fn run(recipes: Vec<Recipe>) -> io::Result<()> {
 struct App {
     recipes: Vec<Recipe>,
     query: String,
+    filtered_indices: Vec<usize>,
     selected: usize,
     status: Status,
     matcher: SkimMatcherV2,
@@ -92,9 +93,10 @@ struct RunningCommand {
 
 impl App {
     fn new(recipes: Vec<Recipe>) -> io::Result<Self> {
-        Ok(Self {
+        let mut app = Self {
             recipes,
             query: String::new(),
+            filtered_indices: Vec::new(),
             selected: 0,
             status: Status::Idle,
             matcher: SkimMatcherV2::default(),
@@ -102,12 +104,16 @@ impl App {
             running_command: None,
             spinner_frame: 0,
             clipboard: ClipboardProvider::detect()?,
-        })
+        };
+        app.refresh_filtered_indices();
+        Ok(app)
     }
 
-    fn filtered_indices(&self) -> Vec<usize> {
+    fn refresh_filtered_indices(&mut self) {
         if self.query.is_empty() {
-            return (0..self.recipes.len()).collect();
+            self.filtered_indices = (0..self.recipes.len()).collect();
+            self.reset_selection_if_needed();
+            return;
         }
 
         let mut scored = Vec::new();
@@ -123,8 +129,19 @@ impl App {
                 scored.push((idx, score));
             }
         }
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
-        scored.into_iter().map(|(idx, _)| idx).collect()
+        scored.sort_by(|(_, score_a), (_, score_b)| score_b.cmp(score_a));
+        self.filtered_indices = scored.into_iter().map(|(idx, _)| idx).collect();
+        self.reset_selection_if_needed();
+    }
+
+    fn push_query_char(&mut self, ch: char) {
+        self.query.push(ch);
+        self.refresh_filtered_indices();
+    }
+
+    fn pop_query_char(&mut self) {
+        self.query.pop();
+        self.refresh_filtered_indices();
     }
 
     fn selected_recipe_index(&self, filtered: &[usize]) -> Option<usize> {
@@ -132,7 +149,7 @@ impl App {
     }
 
     fn move_selection(&mut self, delta: isize) {
-        let filtered_len = self.filtered_indices().len();
+        let filtered_len = self.filtered_indices.len();
         if filtered_len == 0 {
             self.selected = 0;
             return;
@@ -142,7 +159,7 @@ impl App {
     }
 
     fn reset_selection_if_needed(&mut self) {
-        let filtered_len = self.filtered_indices().len();
+        let filtered_len = self.filtered_indices.len();
         if filtered_len == 0 {
             self.selected = 0;
         } else if self.selected >= filtered_len {
@@ -156,8 +173,7 @@ impl App {
             return false;
         }
 
-        let filtered = self.filtered_indices();
-        let Some(recipe_idx) = self.selected_recipe_index(&filtered) else {
+        let Some(recipe_idx) = self.selected_recipe_index(&self.filtered_indices) else {
             self.status = Status::NoRecipeSelected;
             return false;
         };
@@ -270,7 +286,7 @@ impl App {
             Ok(recipes) => {
                 self.recipes = recipes;
                 self.status = Status::Reloaded;
-                self.reset_selection_if_needed();
+                self.refresh_filtered_indices();
             }
             Err(_) => self.status = Status::ReloadError,
         }
@@ -394,17 +410,13 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
             app.start_action(Action::Run);
         }
         KeyCode::Backspace => {
-            app.query.pop();
-            app.selected = 0;
+            app.pop_query_char();
         }
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.query.push(ch);
-            app.selected = 0;
+            app.push_query_char(ch);
         }
         _ => {}
     }
-
-    app.reset_selection_if_needed();
     false
 }
 
@@ -516,7 +528,7 @@ fn render(frame: &mut Frame, app: &App) {
         ])
         .split(frame.area());
 
-    let filtered = app.filtered_indices();
+    let filtered = &app.filtered_indices;
 
     let search_title = match app.mode {
         Mode::Normal => " Search (/ to edit) ",
@@ -574,7 +586,7 @@ fn render(frame: &mut Frame, app: &App) {
     }
     frame.render_stateful_widget(list, body[0], &mut state);
 
-    let detail_text = recipe_details(app, &filtered);
+    let detail_text = recipe_details(app, filtered);
     let details = Paragraph::new(detail_text)
         .block(Block::default().borders(Borders::ALL).title(" Details "))
         .wrap(Wrap { trim: false });
