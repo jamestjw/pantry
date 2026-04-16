@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,8 @@ pub struct Recipe {
     pub command: String,
     #[serde(default)]
     pub presets: Vec<String>,
+    #[serde(default)]
+    pub choices: HashMap<String, Vec<String>>,
     #[serde(default = "default_safety")]
     pub safety: String,
     #[serde(skip)]
@@ -109,4 +112,35 @@ fn global_recipe_path() -> io::Result<PathBuf> {
 
 fn local_recipe_path() -> io::Result<PathBuf> {
     Ok(std::env::current_dir()?.join(".pantry.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RecipeFile;
+
+    #[test]
+    fn deserializes_placeholder_choices() {
+        let file: RecipeFile = toml::from_str(
+            r#"[[recipe]]
+name = "deploy service"
+command = "deploy --env {env} --service {service}"
+choices = { env = ["dev", "staging", "prod"], service = ["api", "web"] }
+"#,
+        )
+        .expect("recipe file should parse");
+
+        let recipe = &file.recipe[0];
+        assert_eq!(
+            recipe.choices.get("env"),
+            Some(&vec![
+                "dev".to_string(),
+                "staging".to_string(),
+                "prod".to_string()
+            ])
+        );
+        assert_eq!(
+            recipe.choices.get("service"),
+            Some(&vec!["api".to_string(), "web".to_string()])
+        );
+    }
 }

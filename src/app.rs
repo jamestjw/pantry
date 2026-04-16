@@ -46,9 +46,11 @@ struct PromptState {
     action: Action,
     recipe_idx: usize,
     placeholders: Vec<String>,
+    choices: HashMap<String, Vec<String>>,
     current: usize,
     values: HashMap<String, String>,
     input: String,
+    choice_index: usize,
     presets: Vec<String>,
     selected_preset: usize,
     stage: PromptStage,
@@ -150,9 +152,11 @@ impl App {
             action,
             recipe_idx,
             placeholders,
+            choices: recipe.choices.clone(),
             current: 0,
             values: HashMap::new(),
             input: String::new(),
+            choice_index: 0,
             presets: recipe.presets.clone(),
             selected_preset: 0,
             stage: if recipe.presets.is_empty() {
@@ -253,6 +257,26 @@ impl App {
                 self.status = format!("Reload failed: {err}");
             }
         }
+    }
+}
+
+impl PromptState {
+    fn current_placeholder(&self) -> &str {
+        &self.placeholders[self.current]
+    }
+
+    fn current_choices(&self) -> Option<&[String]> {
+        self.choices
+            .get(self.current_placeholder())
+            .filter(|choices| !choices.is_empty())
+            .map(Vec::as_slice)
+    }
+
+    fn advance(&mut self) -> bool {
+        self.input.clear();
+        self.choice_index = 0;
+        self.current += 1;
+        self.current >= self.placeholders.len()
     }
 }
 
@@ -415,20 +439,40 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent) -> bool {
                     app.status = "Cancelled".to_string();
                     return false;
                 }
+                KeyCode::Up => {
+                    if prompt.current_choices().is_some() && prompt.choice_index > 0 {
+                        prompt.choice_index -= 1;
+                    }
+                }
+                KeyCode::Down => {
+                    if let Some(choices) = prompt.current_choices() {
+                        let last_index = choices.len().saturating_sub(1);
+                        if prompt.choice_index < last_index {
+                            prompt.choice_index += 1;
+                        }
+                    }
+                }
                 KeyCode::Backspace => {
-                    prompt.input.pop();
+                    if prompt.current_choices().is_none() {
+                        prompt.input.pop();
+                    }
                 }
                 KeyCode::Enter => {
-                    let key_name = prompt.placeholders[prompt.current].clone();
-                    prompt.values.insert(key_name, prompt.input.clone());
-                    prompt.input.clear();
-                    prompt.current += 1;
-                    if prompt.current >= prompt.placeholders.len() {
+                    let key_name = prompt.current_placeholder().to_string();
+                    let value = if let Some(choices) = prompt.current_choices() {
+                        choices[prompt.choice_index].clone()
+                    } else {
+                        prompt.input.clone()
+                    };
+                    prompt.values.insert(key_name, value);
+                    if prompt.advance() {
                         execute = Some((prompt.action, prompt.recipe_idx, prompt.values.clone()));
                     }
                 }
                 KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    prompt.input.push(ch);
+                    if prompt.current_choices().is_none() {
+                        prompt.input.push(ch);
+                    }
                 }
                 _ => {}
             },
@@ -661,6 +705,23 @@ fn recipe_details(app: &App, filtered: &[usize]) -> Text<'static> {
         }
     }
 
+    if !recipe.choices.is_empty() {
+        lines.push(Line::from(String::new()));
+        lines.push(Line::from(vec![Span::styled("CHOICES:", header_style)]));
+        let mut choice_names: Vec<_> = recipe.choices.keys().collect();
+        choice_names.sort();
+        for name in choice_names {
+            if let Some(values) = recipe.choices.get(name) {
+                lines.push(Line::from(vec![
+                    Span::raw("  - "),
+                    Span::styled(format!("{{{name}}}"), Style::default().fg(Color::Cyan)),
+                    Span::raw(": "),
+                    Span::raw(values.join(", ")),
+                ]));
+            }
+        }
+    }
+
     if let Some(run) = &recipe.last_run {
         lines.push(Line::from(String::new()));
         lines.push(Line::from(vec![Span::styled("LAST RUN:", header_style)]));
@@ -732,12 +793,17 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
                 Action::Copy { quit_after: true } => " Fill placeholders to copy and quit ",
             };
             let mut lines = Vec::new();
+            let current_choices = prompt.current_choices();
 
             for (idx, placeholder) in prompt.placeholders.iter().enumerate() {
                 let value = if idx < prompt.current {
                     prompt.values.get(placeholder).cloned().unwrap_or_default()
                 } else if idx == prompt.current {
-                    prompt.input.clone()
+                    if let Some(choices) = current_choices {
+                        choices[prompt.choice_index].clone()
+                    } else {
+                        prompt.input.clone()
+                    }
                 } else {
                     String::new()
                 };
@@ -757,6 +823,29 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
                     Line::from(format!("{} {{{}}}: {}", prefix, placeholder, value))
                 };
                 lines.push(line);
+
+                if idx == prompt.current {
+                    if let Some(choices) = current_choices {
+                        for (choice_idx, choice) in choices.iter().enumerate() {
+                            let marker = if choice_idx == prompt.choice_index {
+                                ">"
+                            } else {
+                                " "
+                            };
+                            lines.push(Line::from(vec![
+                                Span::raw("    "),
+                                Span::styled(
+                                    format!("{} {}", marker, choice),
+                                    if choice_idx == prompt.choice_index {
+                                        Style::default().fg(Color::Yellow)
+                                    } else {
+                                        Style::default().fg(Color::Gray)
+                                    },
+                                ),
+                            ]));
+                        }
+                    }
+                }
             }
 
             (title, Text::from(lines))
@@ -765,7 +854,13 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
 
     let footer_text = match prompt.stage {
         PromptStage::ChoosePreset => " Enter select | Esc cancel ",
-        PromptStage::InputValues => " Enter accept | Esc cancel ",
+        PromptStage::InputValues => {
+            if prompt.current_choices().is_some() {
+                " Up/down choose | Enter accept | Esc cancel "
+            } else {
+                " Enter accept | Esc cancel "
+            }
+        }
     };
 
     let block = Block::default()

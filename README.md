@@ -55,6 +55,17 @@ Use placeholders in braces (`{branch}`, `{service}`, etc.). Pantry prompts for v
 
 You can define `presets` as ready-made placeholder assignments. For commands with multiple placeholders, include all values in a single preset string, for example `"service=api env=prod"` or `"branch=main remote=origin"`. At runtime Pantry lets you choose a preset or enter custom values manually.
 
+You can also define `choices` for placeholders when a value should come from a fixed list. Pantry will show those values in the prompt and let you choose with `up/down` instead of typing.
+
+```toml
+[[recipe]]
+name = "deploy service"
+description = "Deploy a service to a known environment"
+command = "deploy-tool --service {service} --env {env}"
+choices = { service = ["api", "worker", "web"], env = ["dev", "staging", "prod"] }
+presets = ["service=api env=staging"]
+```
+
 For multiline commands, prefer TOML multiline strings:
 
 ```toml
