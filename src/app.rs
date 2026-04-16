@@ -54,6 +54,7 @@ struct PromptState {
     presets: Vec<String>,
     selected_preset: usize,
     stage: PromptStage,
+    error: Option<String>,
 }
 
 enum PromptStage {
@@ -164,6 +165,7 @@ impl App {
             } else {
                 PromptStage::ChoosePreset
             },
+            error: None,
         });
         self.status.clear();
         false
@@ -393,9 +395,9 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
 
 fn handle_prompt_key(app: &mut App, key: KeyEvent) -> bool {
     let mut execute: Option<(Action, usize, HashMap<String, String>)> = None;
-    let mut status: Option<String> = None;
 
     if let Mode::Prompt(prompt) = &mut app.mode {
+        let mut new_error = None;
         match prompt.stage {
             PromptStage::ChoosePreset => match key.code {
                 KeyCode::Esc => {
@@ -423,7 +425,7 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent) -> bool {
                             .iter()
                             .find(|placeholder| !values.contains_key(*placeholder))
                         {
-                            status = Some(format!("Preset missing value for {{{missing}}}"));
+                            new_error = Some(format!("Preset missing value for {{{missing}}}"));
                         } else {
                             execute = Some((prompt.action, prompt.recipe_idx, values));
                         }
@@ -477,10 +479,8 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent) -> bool {
                 _ => {}
             },
         }
-    }
 
-    if let Some(status) = status {
-        app.status = status;
+        prompt.error = new_error;
     }
 
     if let Some((action, recipe_idx, values)) = execute {
@@ -775,16 +775,24 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
                 } else {
                     " "
                 };
-                lines.push(format!("{} {}", marker, preset));
+                lines.push(Line::from(format!("{} {}", marker, preset)));
             }
             let custom_marker = if prompt.selected_preset == prompt.presets.len() {
                 ">"
             } else {
                 " "
             };
-            lines.push(format!("{} Custom values", custom_marker));
+            lines.push(Line::from(format!("{} Custom values", custom_marker)));
 
-            (title, Text::from(lines.join("\n")))
+            if let Some(error) = &prompt.error {
+                lines.push(Line::from(String::new()));
+                lines.push(Line::from(vec![Span::styled(
+                    error.clone(),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )]));
+            }
+
+            (title, Text::from(lines))
         }
         PromptStage::InputValues => {
             let title = match prompt.action {
