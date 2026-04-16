@@ -182,24 +182,13 @@ impl App {
         if placeholders.is_empty() {
             return self.execute_action(action, recipe_idx, HashMap::new());
         }
-        self.mode = Mode::Prompt(PromptState {
+        self.mode = Mode::Prompt(PromptState::new(
             action,
             recipe_idx,
             placeholders,
-            choices: recipe.choices.clone(),
-            current: 0,
-            values: HashMap::new(),
-            input: String::new(),
-            choice_index: 0,
-            presets: recipe.presets.clone(),
-            selected_preset: 0,
-            stage: if recipe.presets.is_empty() {
-                PromptStage::InputValues
-            } else {
-                PromptStage::ChoosePreset
-            },
-            error: None,
-        });
+            recipe.choices.clone(),
+            recipe.presets.clone(),
+        ));
         self.status = Status::Idle;
         false
     }
@@ -218,8 +207,7 @@ impl App {
                     self.status = Status::Copied;
                     return quit_after;
                 }
-                Err(err) => {
-                    let _ = err;
+                Err(_) => {
                     self.status = Status::CopyError;
                 }
             },
@@ -294,6 +282,35 @@ impl App {
 }
 
 impl PromptState {
+    fn new(
+        action: Action,
+        recipe_idx: usize,
+        placeholders: Vec<String>,
+        choices: HashMap<String, Vec<String>>,
+        presets: Vec<String>,
+    ) -> Self {
+        let stage = if presets.is_empty() {
+            PromptStage::InputValues
+        } else {
+            PromptStage::ChoosePreset
+        };
+
+        Self {
+            action,
+            recipe_idx,
+            placeholders,
+            choices,
+            current: 0,
+            values: HashMap::new(),
+            input: String::new(),
+            choice_index: 0,
+            presets,
+            selected_preset: 0,
+            stage,
+            error: None,
+        }
+    }
+
     fn current_placeholder(&self) -> &str {
         &self.placeholders[self.current]
     }
@@ -327,6 +344,10 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> io::Result
             continue;
         };
 
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+            break;
+        }
+
         match &mut app.mode {
             Mode::Normal => {
                 if handle_normal_key(&mut app, key) {
@@ -352,10 +373,6 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> io::Result
 }
 
 fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
-    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-        return true;
-    }
-
     match key.code {
         KeyCode::Char('q') => return true,
         KeyCode::Char('Y') => {
@@ -385,10 +402,6 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
 }
 
 fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
-    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-        return true;
-    }
-
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
