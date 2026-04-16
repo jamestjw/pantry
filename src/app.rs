@@ -6,16 +6,16 @@ use std::thread;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use ratatui::Frame;
+use fuzzy_matcher::FuzzyMatcher;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::Frame;
 
 use crate::clipboard::ClipboardProvider;
-use crate::model::{Recipe, RunOutput, reload_recipes};
+use crate::model::{reload_recipes, Recipe, RunOutput};
 use crate::template;
 
 pub fn run(recipes: Vec<Recipe>) -> io::Result<()> {
@@ -30,6 +30,7 @@ struct App {
     query: String,
     selected: usize,
     status: Status,
+    matcher: SkimMatcherV2,
     mode: Mode,
     running_command: Option<RunningCommand>,
     spinner_frame: usize,
@@ -96,6 +97,7 @@ impl App {
             query: String::new(),
             selected: 0,
             status: Status::Idle,
+            matcher: SkimMatcherV2::default(),
             mode: Mode::Normal,
             running_command: None,
             spinner_frame: 0,
@@ -108,7 +110,6 @@ impl App {
             return (0..self.recipes.len()).collect();
         }
 
-        let matcher = SkimMatcherV2::default();
         let mut scored = Vec::new();
         for (idx, recipe) in self.recipes.iter().enumerate() {
             let haystack = format!(
@@ -118,7 +119,7 @@ impl App {
                 recipe.description,
                 recipe.command
             );
-            if let Some(score) = matcher.fuzzy_match(&haystack, &self.query) {
+            if let Some(score) = self.matcher.fuzzy_match(&haystack, &self.query) {
                 scored.push((idx, score));
             }
         }
