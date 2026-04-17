@@ -53,6 +53,15 @@ presets = ["branch=main"]
 
 Use placeholders in braces (`{branch}`, `{service}`, etc.). Pantry prompts for values before running/copying.
 
+For terminal-driven programs like `ssh`, `vim`, or other interactive tools, set `interactive = true`. Pantry will temporarily suspend the TUI, run the command attached to your terminal, then restore the TUI when it exits.
+
+```toml
+[[recipe]]
+name = "ssh staging"
+command = "ssh deploy@staging"
+interactive = true
+```
+
 You can define `presets` as ready-made placeholder assignments. For commands with multiple placeholders, include all values in a single preset string, for example `"service=api env=prod"` or `"branch=main remote=origin"`. At runtime Pantry lets you choose a preset or enter custom values manually.
 
 You can also define `choices` for placeholders when a value should come from a fixed list. Pantry will show those values in the prompt and let you choose with `up/down` instead of typing.

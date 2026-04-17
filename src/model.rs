@@ -16,6 +16,8 @@ pub struct Recipe {
     pub description: String,
     pub command: String,
     #[serde(default)]
+    pub interactive: bool,
+    #[serde(default)]
     pub presets: Vec<String>,
     #[serde(default)]
     pub choices: HashMap<String, Vec<String>>,

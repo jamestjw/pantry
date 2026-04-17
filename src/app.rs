@@ -169,7 +169,7 @@ impl App {
         }
     }
 
-    fn start_action(&mut self, action: Action) -> bool {
+    fn start_action(&mut self, action: Action, terminal: &mut ratatui::DefaultTerminal) -> bool {
         if matches!(action, Action::Run) && self.running_command.is_some() {
             self.status = Status::AlreadyRunning;
             return false;
@@ -182,7 +182,7 @@ impl App {
         let recipe = &self.recipes[recipe_idx];
         let placeholders = recipe.compiled.placeholders();
         if placeholders.is_empty() {
-            return self.execute_action(action, recipe_idx, HashMap::new());
+            return self.execute_action(action, recipe_idx, HashMap::new(), terminal);
         }
         self.mode = Mode::Prompt(PromptState::new(
             action,
@@ -200,6 +200,7 @@ impl App {
         action: Action,
         recipe_idx: usize,
         values: HashMap<String, String>,
+        terminal: &mut ratatui::DefaultTerminal,
     ) -> bool {
         let recipe = &self.recipes[recipe_idx];
         let rendered = recipe.compiled.render(&values);
@@ -214,6 +215,10 @@ impl App {
                 }
             },
             Action::Run => {
+                if recipe.interactive {
+                    return self.run_interactive_command(recipe_idx, &rendered, terminal);
+                }
+
                 let (sender, receiver) = mpsc::channel();
                 thread::spawn(move || {
                     let output = run_command(&rendered);
@@ -233,6 +238,40 @@ impl App {
 
     fn copy_to_clipboard(&mut self, text: &str) -> io::Result<()> {
         self.clipboard.copy(text)
+    }
+
+    fn run_interactive_command(
+        &mut self,
+        recipe_idx: usize,
+        command: &str,
+        terminal: &mut ratatui::DefaultTerminal,
+    ) -> bool {
+        ratatui::restore();
+        let result = Command::new("sh").arg("-lc").arg(command).status();
+        *terminal = ratatui::init();
+
+        match result {
+            Ok(status) => {
+                self.status = match status.code() {
+                    Some(0) => Status::RanSuccessfully,
+                    Some(_) => Status::RunFailed,
+                    None => Status::RunTerminated,
+                };
+                if recipe_idx < self.recipes.len() {
+                    self.recipes[recipe_idx].last_run = Some(RunOutput {
+                        command: command.to_string(),
+                        code: status.code(),
+                        stdout: String::new(),
+                        stderr: String::new(),
+                    });
+                }
+            }
+            Err(_) => {
+                self.status = Status::RunError;
+            }
+        }
+
+        false
     }
 
     fn poll_running_command(&mut self) {
@@ -381,25 +420,19 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> io::Result
             break;
         }
 
-        if matches!(app.mode, Mode::Normal) && matches!(key.code, KeyCode::Char('e')) {
-            app.edit_selected_recipe(terminal)?;
-            app.tick();
-            continue;
-        }
-
         match &mut app.mode {
             Mode::Normal => {
-                if handle_normal_key(&mut app, key) {
+                if handle_normal_key(&mut app, key, terminal) {
                     break;
                 }
             }
             Mode::Search => {
-                if handle_search_key(&mut app, key) {
+                if handle_search_key(&mut app, key, terminal) {
                     break;
                 }
             }
             Mode::Prompt(_) => {
-                if handle_prompt_key(&mut app, key) {
+                if handle_prompt_key(&mut app, key, terminal) {
                     break;
                 }
             }
@@ -411,22 +444,31 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> io::Result
     Ok(())
 }
 
-fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
+fn handle_normal_key(
+    app: &mut App,
+    key: KeyEvent,
+    terminal: &mut ratatui::DefaultTerminal,
+) -> bool {
     match key.code {
         KeyCode::Char('q') => return true,
         KeyCode::Char('Y') => {
-            if app.start_action(Action::Copy { quit_after: true }) {
+            if app.start_action(Action::Copy { quit_after: true }, terminal) {
                 return true;
             }
             app.reset_selection_if_needed();
         }
         KeyCode::Char('y') => {
-            app.start_action(Action::Copy { quit_after: false });
+            app.start_action(Action::Copy { quit_after: false }, terminal);
+        }
+        KeyCode::Char('e') => {
+            if app.edit_selected_recipe(terminal).is_err() {
+                return true;
+            }
         }
         KeyCode::Up => app.move_selection(-1),
         KeyCode::Down => app.move_selection(1),
         KeyCode::Enter => {
-            app.start_action(Action::Run);
+            app.start_action(Action::Run, terminal);
         }
         KeyCode::Char('r') => app.reload(),
         KeyCode::Char('/') => {
@@ -440,7 +482,11 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
     false
 }
 
-fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
+fn handle_search_key(
+    app: &mut App,
+    key: KeyEvent,
+    terminal: &mut ratatui::DefaultTerminal,
+) -> bool {
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
@@ -459,7 +505,7 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Enter => {
             app.mode = Mode::Normal;
             app.status = Status::Idle;
-            app.start_action(Action::Run);
+            app.start_action(Action::Run, terminal);
         }
         KeyCode::Backspace => {
             app.pop_query_char();
@@ -472,7 +518,11 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
     false
 }
 
-fn handle_prompt_key(app: &mut App, key: KeyEvent) -> bool {
+fn handle_prompt_key(
+    app: &mut App,
+    key: KeyEvent,
+    terminal: &mut ratatui::DefaultTerminal,
+) -> bool {
     let mut execute: Option<(Action, usize, HashMap<String, String>)> = None;
 
     if let Mode::Prompt(prompt) = &mut app.mode {
@@ -564,7 +614,7 @@ fn handle_prompt_key(app: &mut App, key: KeyEvent) -> bool {
 
     if let Some((action, recipe_idx, values)) = execute {
         app.mode = Mode::Normal;
-        return app.execute_action(action, recipe_idx, values);
+        return app.execute_action(action, recipe_idx, values, terminal);
     }
 
     false
@@ -732,6 +782,17 @@ fn recipe_details(app: &App, filtered: &[usize]) -> Text<'static> {
                     Style::default().fg(Color::Green)
                 } else {
                     Style::default().fg(Color::Red)
+                },
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("INTERACTIVE: ", header_style),
+            Span::styled(
+                if recipe.interactive { "yes" } else { "no" },
+                if recipe.interactive {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::DarkGray)
                 },
             ),
         ]),
