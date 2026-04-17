@@ -99,5 +99,6 @@ command = "echo {{this is literal}} and {this_is_a_placeholder}"
 - `Enter`: run selected command
 - `y`: copy selected command to clipboard
 - `Y`: copy selected command to clipboard, then quit
+- `e`: open the selected recipe file in `$VISUAL` or `$EDITOR`, then reload recipes on exit
 - `r`: reload recipe files
 - `q` or `Ctrl+C`: quit

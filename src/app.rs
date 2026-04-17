@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::env;
 use std::io;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -45,6 +46,7 @@ enum Status {
     NoRecipeSelected,
     Copied,
     CopyError,
+    EditError,
     RanSuccessfully,
     RunFailed,
     RunTerminated,
@@ -279,6 +281,37 @@ impl App {
             Err(_) => self.status = Status::ReloadError,
         }
     }
+
+    fn edit_selected_recipe(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
+        let Some(recipe_idx) = self.selected_recipe_index(&self.filtered_indices) else {
+            self.status = Status::NoRecipeSelected;
+            return Ok(());
+        };
+
+        let path = self.recipes[recipe_idx].source.clone();
+        ratatui::restore();
+
+        let editor = env::var("VISUAL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                env::var("EDITOR")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .unwrap_or_else(|| "vi".to_string());
+        let command = format!("exec {} {}", editor, shell_quote(&path));
+        let result = Command::new("sh").arg("-lc").arg(command).status();
+
+        *terminal = ratatui::init();
+
+        match result {
+            Ok(_) => self.reload(),
+            Err(_) => self.status = Status::EditError,
+        }
+
+        Ok(())
+    }
 }
 
 impl PromptState {
@@ -346,6 +379,12 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> io::Result
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
             break;
+        }
+
+        if matches!(app.mode, Mode::Normal) && matches!(key.code, KeyCode::Char('e')) {
+            app.edit_selected_recipe(terminal)?;
+            app.tick();
+            continue;
         }
 
         match &mut app.mode {
@@ -607,7 +646,7 @@ fn render(frame: &mut Frame, app: &App) {
 
     let shortcut_text = match app.mode {
         Mode::Normal => {
-            "Normal: / search | Enter run | y copy | Y copy+quit | r reload | q / Ctrl+C quit"
+            "Normal: / search | Enter run | y copy | Y copy+quit | e edit | r reload | q / Ctrl+C quit"
         }
         Mode::Search => "Search: type filter | Up/Down move | Enter run | Esc stop editing",
         Mode::Prompt(_) => "Prompt: type value | Enter continue | Esc cancel",
@@ -642,6 +681,7 @@ fn footer_state(app: &App) -> (String, Style) {
 
     match (&app.mode, &app.status) {
         (_, Status::CopyError) => ("COPY ERROR".to_string(), Style::default().fg(Color::Red)),
+        (_, Status::EditError) => ("EDIT ERROR".to_string(), Style::default().fg(Color::Red)),
         (_, Status::ReloadError) => ("RELOAD ERROR".to_string(), Style::default().fg(Color::Red)),
         (_, Status::RunTerminated) => ("SIGNAL".to_string(), Style::default().fg(Color::Red)),
         (_, Status::RunFailed) => ("RUN FAILED".to_string(), Style::default().fg(Color::Red)),
@@ -663,6 +703,10 @@ fn footer_state(app: &App) -> (String, Style) {
             ("PROMPT".to_string(), Style::default().fg(Color::Magenta))
         }
     }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn recipe_details(app: &App, filtered: &[usize]) -> Text<'static> {
