@@ -6,7 +6,7 @@ use crate::exec;
 use crate::model::Recipe;
 
 #[derive(Debug, Parser)]
-#[command(name = "pantry")]
+#[command(name = "pantry", version, about)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
