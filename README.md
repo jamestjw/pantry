@@ -18,6 +18,27 @@ Then run it with:
 pantry
 ```
 
+## Headless CLI mode
+
+Pantry also supports non-TUI usage via subcommands:
+
+```bash
+# list loaded recipes
+pantry list
+
+# render a recipe after filling placeholders
+pantry render "deploy service" --set service=api --set env=prod
+
+# run a recipe directly in your terminal
+pantry run "deploy service" --set service=api --set env=prod
+```
+
+Notes:
+
+- Recipe names are matched exactly in headless mode.
+- If a recipe has `safety = "confirm"`, headless `run` requires `--yes`.
+- Placeholder values are validated against `choices` when defined.
+
 On first launch, Pantry creates a starter recipe file at:
 
 `~/.config/pantry/recipes.toml`

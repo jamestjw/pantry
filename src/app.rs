@@ -7,16 +7,17 @@ use std::thread;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
-use ratatui::Frame;
 
 use crate::clipboard::ClipboardProvider;
-use crate::model::{reload_recipes, Recipe, RunOutput};
+use crate::exec;
+use crate::model::{Recipe, RunOutput, reload_recipes};
 use crate::template;
 
 pub fn run(recipes: Vec<Recipe>) -> io::Result<()> {
@@ -221,7 +222,7 @@ impl App {
 
                 let (sender, receiver) = mpsc::channel();
                 thread::spawn(move || {
-                    let output = run_command(&rendered);
+                    let output = exec::run_captured(&rendered);
                     let _ = sender.send(output);
                 });
                 self.running_command = Some(RunningCommand {
@@ -247,7 +248,7 @@ impl App {
         terminal: &mut ratatui::DefaultTerminal,
     ) -> bool {
         ratatui::restore();
-        let result = Command::new("sh").arg("-lc").arg(command).status();
+        let result = exec::run_attached(command);
         *terminal = ratatui::init();
 
         match result {
@@ -1027,21 +1028,4 @@ fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
-}
-
-fn run_command(command: &str) -> RunOutput {
-    match Command::new("sh").arg("-lc").arg(command).output() {
-        Ok(output) => RunOutput {
-            command: command.to_string(),
-            code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        },
-        Err(err) => RunOutput {
-            command: command.to_string(),
-            code: Some(1),
-            stdout: String::new(),
-            stderr: err.to_string(),
-        },
-    }
 }
