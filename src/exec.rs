@@ -122,7 +122,7 @@ pub fn run_captured(command: &str) -> RunOutput {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::model::Recipe;
+    use crate::model::{Recipe, Safety};
     use crate::template::Template;
 
     use super::resolve_values;
@@ -136,7 +136,7 @@ mod tests {
             interactive: false,
             presets: Vec::new(),
             choices: HashMap::new(),
-            safety: "safe".to_string(),
+            safety: Safety::Safe,
             source: "test".to_string(),
             compiled: Template::parse(command),
             last_run: None,

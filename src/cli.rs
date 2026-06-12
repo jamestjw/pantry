@@ -3,7 +3,7 @@ use std::io;
 use clap::{Args, Parser, Subcommand};
 
 use crate::exec;
-use crate::model::Recipe;
+use crate::model::{Recipe, Safety};
 
 #[derive(Debug, Parser)]
 #[command(name = "pantry", version, about)]
@@ -65,7 +65,7 @@ pub fn run_command(command: Command, recipes: &[Recipe]) -> io::Result<i32> {
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
             let rendered = recipe.compiled.render(&values);
 
-            if recipe.safety == "confirm" && !args.yes {
+            if recipe.safety == Safety::Confirm && !args.yes {
                 eprintln!("Recipe '{}' requires confirmation.", recipe.name);
                 eprintln!("Rendered command:");
                 eprintln!("{rendered}");

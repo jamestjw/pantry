@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 
 use crate::clipboard::ClipboardProvider;
 use crate::exec;
-use crate::model::{Recipe, RunOutput, reload_recipes};
+use crate::model::{Recipe, RunOutput, Safety, reload_recipes};
 use crate::template;
 
 pub fn run(recipes: Vec<Recipe>) -> io::Result<()> {
@@ -33,6 +33,7 @@ struct App {
     filtered_indices: Vec<usize>,
     selected: usize,
     status: Status,
+    status_detail: Option<String>,
     matcher: SkimMatcherV2,
     mode: Mode,
     running_command: Option<RunningCommand>,
@@ -60,7 +61,7 @@ enum Status {
 enum Mode {
     Normal,
     Search,
-    Prompt(PromptState),
+    Prompt(Box<PromptState>),
 }
 
 struct PromptState {
@@ -102,6 +103,7 @@ impl App {
             filtered_indices: Vec::new(),
             selected: 0,
             status: Status::Idle,
+            status_detail: None,
             matcher: SkimMatcherV2::default(),
             mode: Mode::Normal,
             running_command: None,
@@ -110,6 +112,16 @@ impl App {
         };
         app.refresh_filtered_indices();
         Ok(app)
+    }
+
+    fn set_status(&mut self, status: Status) {
+        self.status = status;
+        self.status_detail = None;
+    }
+
+    fn set_status_with_detail(&mut self, status: Status, detail: impl Into<String>) {
+        self.status = status;
+        self.status_detail = Some(detail.into());
     }
 
     fn refresh_filtered_indices(&mut self) {
@@ -172,12 +184,12 @@ impl App {
 
     fn start_action(&mut self, action: Action, terminal: &mut ratatui::DefaultTerminal) -> bool {
         if matches!(action, Action::Run) && self.running_command.is_some() {
-            self.status = Status::AlreadyRunning;
+            self.set_status(Status::AlreadyRunning);
             return false;
         }
 
         let Some(recipe_idx) = self.selected_recipe_index(&self.filtered_indices) else {
-            self.status = Status::NoRecipeSelected;
+            self.set_status(Status::NoRecipeSelected);
             return false;
         };
         let recipe = &self.recipes[recipe_idx];
@@ -185,14 +197,14 @@ impl App {
         if placeholders.is_empty() {
             return self.execute_action(action, recipe_idx, HashMap::new(), terminal);
         }
-        self.mode = Mode::Prompt(PromptState::new(
+        self.mode = Mode::Prompt(Box::new(PromptState::new(
             action,
             recipe_idx,
             placeholders,
             recipe.choices.clone(),
             recipe.presets.clone(),
-        ));
-        self.status = Status::Idle;
+        )));
+        self.set_status(Status::Idle);
         false
     }
 
@@ -208,11 +220,11 @@ impl App {
         match action {
             Action::Copy { quit_after } => match self.copy_to_clipboard(&rendered) {
                 Ok(()) => {
-                    self.status = Status::Copied;
+                    self.set_status(Status::Copied);
                     return quit_after;
                 }
-                Err(_) => {
-                    self.status = Status::CopyError;
+                Err(err) => {
+                    self.set_status_with_detail(Status::CopyError, err.to_string());
                 }
             },
             Action::Run => {
@@ -230,7 +242,7 @@ impl App {
                     receiver,
                 });
                 self.spinner_frame = 0;
-                self.status = Status::Idle;
+                self.set_status(Status::Idle);
             }
         }
 
@@ -253,11 +265,11 @@ impl App {
 
         match result {
             Ok(status) => {
-                self.status = match status.code() {
+                self.set_status(match status.code() {
                     Some(0) => Status::RanSuccessfully,
                     Some(_) => Status::RunFailed,
                     None => Status::RunTerminated,
-                };
+                });
                 if recipe_idx < self.recipes.len() {
                     self.recipes[recipe_idx].last_run = Some(RunOutput {
                         command: command.to_string(),
@@ -267,8 +279,8 @@ impl App {
                     });
                 }
             }
-            Err(_) => {
-                self.status = Status::RunError;
+            Err(err) => {
+                self.set_status_with_detail(Status::RunError, err.to_string());
             }
         }
 
@@ -290,17 +302,17 @@ impl App {
         }
 
         if let Some((idx, output)) = finished {
-            self.status = match output.code {
+            self.set_status(match output.code {
                 Some(0) => Status::RanSuccessfully,
                 Some(_) => Status::RunFailed,
                 None => Status::RunTerminated,
-            };
+            });
             if idx < self.recipes.len() {
                 self.recipes[idx].last_run = Some(output);
             }
             self.running_command = None;
         } else if disconnected {
-            self.status = Status::RunError;
+            self.set_status_with_detail(Status::RunError, "command runner disconnected");
             self.running_command = None;
         }
     }
@@ -315,16 +327,16 @@ impl App {
         match reload_recipes() {
             Ok(recipes) => {
                 self.recipes = recipes;
-                self.status = Status::Reloaded;
+                self.set_status(Status::Reloaded);
                 self.refresh_filtered_indices();
             }
-            Err(_) => self.status = Status::ReloadError,
+            Err(err) => self.set_status_with_detail(Status::ReloadError, err.to_string()),
         }
     }
 
     fn edit_selected_recipe(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         let Some(recipe_idx) = self.selected_recipe_index(&self.filtered_indices) else {
-            self.status = Status::NoRecipeSelected;
+            self.set_status(Status::NoRecipeSelected);
             return Ok(());
         };
 
@@ -347,7 +359,7 @@ impl App {
 
         match result {
             Ok(_) => self.reload(),
-            Err(_) => self.status = Status::EditError,
+            Err(err) => self.set_status_with_detail(Status::EditError, err.to_string()),
         }
 
         Ok(())
@@ -461,11 +473,7 @@ fn handle_normal_key(
         KeyCode::Char('y') => {
             app.start_action(Action::Copy { quit_after: false }, terminal);
         }
-        KeyCode::Char('e') => {
-            if app.edit_selected_recipe(terminal).is_err() {
-                return true;
-            }
-        }
+        KeyCode::Char('e') if app.edit_selected_recipe(terminal).is_err() => return true,
         KeyCode::Up => app.move_selection(-1),
         KeyCode::Down => app.move_selection(1),
         KeyCode::Enter => {
@@ -474,7 +482,7 @@ fn handle_normal_key(
         KeyCode::Char('r') => app.reload(),
         KeyCode::Char('/') => {
             app.mode = Mode::Search;
-            app.status = Status::Idle;
+            app.set_status(Status::Idle);
         }
         _ => {}
     }
@@ -491,21 +499,21 @@ fn handle_search_key(
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
-            app.status = Status::Idle;
+            app.set_status(Status::Idle);
         }
         KeyCode::Up => {
             app.mode = Mode::Normal;
-            app.status = Status::Idle;
+            app.set_status(Status::Idle);
             app.move_selection(-1);
         }
         KeyCode::Down => {
             app.mode = Mode::Normal;
-            app.status = Status::Idle;
+            app.set_status(Status::Idle);
             app.move_selection(1);
         }
         KeyCode::Enter => {
             app.mode = Mode::Normal;
-            app.status = Status::Idle;
+            app.set_status(Status::Idle);
             app.start_action(Action::Run, terminal);
         }
         KeyCode::Backspace => {
@@ -532,18 +540,12 @@ fn handle_prompt_key(
             PromptStage::ChoosePreset => match key.code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
-                    app.status = Status::Cancelled;
+                    app.set_status(Status::Cancelled);
                     return false;
                 }
-                KeyCode::Up => {
-                    if prompt.selected_preset > 0 {
-                        prompt.selected_preset -= 1;
-                    }
-                }
-                KeyCode::Down => {
-                    if prompt.selected_preset < prompt.presets.len() {
-                        prompt.selected_preset += 1;
-                    }
+                KeyCode::Up if prompt.selected_preset > 0 => prompt.selected_preset -= 1,
+                KeyCode::Down if prompt.selected_preset < prompt.presets.len() => {
+                    prompt.selected_preset += 1;
                 }
                 KeyCode::Enter => {
                     if prompt.selected_preset < prompt.presets.len() {
@@ -568,13 +570,11 @@ fn handle_prompt_key(
             PromptStage::InputValues => match key.code {
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
-                    app.status = Status::Cancelled;
+                    app.set_status(Status::Cancelled);
                     return false;
                 }
-                KeyCode::Up => {
-                    if prompt.current_choices().is_some() && prompt.choice_index > 0 {
-                        prompt.choice_index -= 1;
-                    }
+                KeyCode::Up if prompt.current_choices().is_some() && prompt.choice_index > 0 => {
+                    prompt.choice_index -= 1;
                 }
                 KeyCode::Down => {
                     if let Some(choices) = prompt.current_choices() {
@@ -584,10 +584,8 @@ fn handle_prompt_key(
                         }
                     }
                 }
-                KeyCode::Backspace => {
-                    if prompt.current_choices().is_none() {
-                        prompt.input.pop();
-                    }
+                KeyCode::Backspace if prompt.current_choices().is_none() => {
+                    prompt.input.pop();
                 }
                 KeyCode::Enter => {
                     let key_name = prompt.current_placeholder().to_string();
@@ -601,10 +599,11 @@ fn handle_prompt_key(
                         execute = Some((prompt.action, prompt.recipe_idx, prompt.values.clone()));
                     }
                 }
-                KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if prompt.current_choices().is_none() {
-                        prompt.input.push(ch);
-                    }
+                KeyCode::Char(ch)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && prompt.current_choices().is_none() =>
+                {
+                    prompt.input.push(ch);
                 }
                 _ => {}
             },
@@ -681,7 +680,12 @@ fn render(frame: &mut Frame, app: &App) {
 
     let list = List::new(items)
         .block(list_block)
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("> ");
     let mut state = ListState::default();
     if !filtered.is_empty() {
@@ -695,16 +699,20 @@ fn render(frame: &mut Frame, app: &App) {
         .wrap(Wrap { trim: false });
     frame.render_widget(details, body[1]);
 
-    let shortcut_text = match app.mode {
-        Mode::Normal => {
-            "Normal: / search | Enter run | y copy | Y copy+quit | e edit | r reload | q / Ctrl+C quit"
+    let shortcut_text = if let Some(detail) = &app.status_detail {
+        detail.as_str()
+    } else {
+        match app.mode {
+            Mode::Normal => {
+                "Normal: / search | Enter run | y copy | Y copy+quit | e edit | r reload | q / Ctrl+C quit"
+            }
+            Mode::Search => "Search: type filter | Up/Down move | Enter run | Esc stop editing",
+            Mode::Prompt(_) => "Prompt: type value | Enter continue | Esc cancel",
         }
-        Mode::Search => "Search: type filter | Up/Down move | Enter run | Esc stop editing",
-        Mode::Prompt(_) => "Prompt: type value | Enter continue | Esc cancel",
     };
     let footer = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(20)])
+        .constraints([Constraint::Min(10), Constraint::Length(22)])
         .split(layout[2]);
     let shortcuts = Paragraph::new(Line::from(shortcut_text))
         .block(Block::default().borders(Borders::ALL).title(" Shortcuts "))
@@ -748,7 +756,7 @@ fn footer_state(app: &App) -> (String, Style) {
         }
         (_, Status::Cancelled) => ("CANCELLED".to_string(), Style::default().fg(Color::Yellow)),
         (_, Status::AlreadyRunning) => ("RUNNING".to_string(), Style::default().fg(Color::Yellow)),
-        (Mode::Normal, Status::Idle) => ("NORMAL".to_string(), Style::default().fg(Color::Blue)),
+        (Mode::Normal, Status::Idle) => ("READY".to_string(), Style::default().fg(Color::Blue)),
         (Mode::Search, Status::Idle) => ("SEARCH".to_string(), Style::default().fg(Color::Yellow)),
         (Mode::Prompt(_), Status::Idle) => {
             ("PROMPT".to_string(), Style::default().fg(Color::Magenta))
@@ -778,8 +786,8 @@ fn recipe_details(app: &App, filtered: &[usize]) -> Text<'static> {
         Line::from(vec![
             Span::styled("SAFETY: ", header_style),
             Span::styled(
-                recipe.safety.clone(),
-                if recipe.safety == "safe" {
+                recipe.safety.to_string(),
+                if recipe.safety == Safety::Safe {
                     Style::default().fg(Color::Green)
                 } else {
                     Style::default().fg(Color::Red)
@@ -959,26 +967,26 @@ fn render_prompt(frame: &mut Frame, prompt: &PromptState) {
                 };
                 lines.push(line);
 
-                if idx == prompt.current {
-                    if let Some(choices) = current_choices {
-                        for (choice_idx, choice) in choices.iter().enumerate() {
-                            let marker = if choice_idx == prompt.choice_index {
-                                ">"
-                            } else {
-                                " "
-                            };
-                            lines.push(Line::from(vec![
-                                Span::raw("    "),
-                                Span::styled(
-                                    format!("{} {}", marker, choice),
-                                    if choice_idx == prompt.choice_index {
-                                        Style::default().fg(Color::Yellow)
-                                    } else {
-                                        Style::default().fg(Color::Gray)
-                                    },
-                                ),
-                            ]));
-                        }
+                if idx == prompt.current
+                    && let Some(choices) = current_choices
+                {
+                    for (choice_idx, choice) in choices.iter().enumerate() {
+                        let marker = if choice_idx == prompt.choice_index {
+                            ">"
+                        } else {
+                            " "
+                        };
+                        lines.push(Line::from(vec![
+                            Span::raw("    "),
+                            Span::styled(
+                                format!("{} {}", marker, choice),
+                                if choice_idx == prompt.choice_index {
+                                    Style::default().fg(Color::Yellow)
+                                } else {
+                                    Style::default().fg(Color::Gray)
+                                },
+                            ),
+                        ]));
                     }
                 }
             }

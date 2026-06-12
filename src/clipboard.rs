@@ -1,7 +1,7 @@
 use std::env;
 use std::io;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 #[derive(Clone, Copy)]
@@ -136,7 +136,7 @@ fn command_exists(program: &str) -> bool {
     env::split_paths(&path).any(|dir| executable_path(&dir, program).is_some())
 }
 
-fn executable_path(dir: &PathBuf, program: &str) -> Option<PathBuf> {
+fn executable_path(dir: &Path, program: &str) -> Option<PathBuf> {
     let path = dir.join(program);
     if path.is_file() { Some(path) } else { None }
 }
